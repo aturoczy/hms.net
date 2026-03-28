@@ -1,0 +1,156 @@
+# Full Hmsnet observability + data stack.
+#
+# Services:
+#   postgres        – PostgreSQL 17 metastore database     (host port 5432)
+#   otel-collector  – Receives all OTLP, fans out to Jaeger + Prometheus  (host port 4317/4318)
+#   jaeger          – Distributed tracing UI                (host port 16686)
+#   prometheus      – Metrics storage                       (host port 9090)
+#   grafana         – Dashboard UI                          (host port 3000)
+#   hiveserver2     – Apache Hive 4 HS2 → .NET HMS          (host ports 10000, 10002)
+#
+# Usage:
+#   cd docker
+#   docker compose up -d
+#   # Then start Hmsnet on the host (port 9083 / 5000)
+#
+# Grafana:  http://localhost:3000  (admin / admin)
+# Jaeger:   http://localhost:16686
+# HS2:      jdbc:hive2://localhost:10000/
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17
+    container_name: hmsnet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hmsnet
+      POSTGRES_PASSWORD: hmsnet_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hmsnet -d metastore"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── OpenTelemetry Collector ───────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: hmsnet-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/otelcol-config.yml"]
+    volumes:
+      - ./otelcollector/otelcol-config.yml:/etc/otelcol/otelcol-config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC — the .NET app sends here
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Collector self-metrics
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - jaeger
+
+  # ── Jaeger (traces) ───────────────────────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: hmsnet-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI
+    # Port 4317 is internal-only (collector → jaeger); not exposed to host
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:16686/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Prometheus (metrics) ──────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hmsnet-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - otel-collector
+
+  # ── Grafana (dashboards) ──────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hmsnet-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - jaeger
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  # ── Apache HiveServer2 ────────────────────────────────────────────────────────
+  hiveserver2:
+    image: apache/hive:4.0.0
+    container_name: hive-server2
+    depends_on:
+      - metastore-init
+    environment:
+      SERVICE_NAME: hiveserver2
+      HIVE_METASTORE_URI: thrift://host.docker.internal:9083
+      IS_RESUME: "true"
+    ports:
+      - "10000:10000"   # HiveServer2 Thrift / JDBC
+      - "10002:10002"   # HiveServer2 Web UI
+    volumes:
+      - ./hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "beeline -u 'jdbc:hive2://localhost:10000/' -e 'SHOW DATABASES;' 2>&1 | grep -q 'default'"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  metastore-init:
+    image: apache/hive:4.0.0
+    container_name: hive-metastore-init
+    environment:
+      SERVICE_NAME: metastore
+      HIVE_METASTORE_URI: thrift://host.docker.internal:9083
+    volumes:
+      - ./hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      bash -c "echo 'Checking metastore connectivity at host.docker.internal:9083...' &&
+               timeout 30 bash -c 'until nc -z host.docker.internal 9083; do sleep 2; echo waiting...; done' &&
+               echo 'Metastore is reachable.' || echo 'WARNING: Could not reach metastore on 9083'"
+    restart: "no"
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:

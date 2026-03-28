@@ -1,0 +1,92 @@
+## ── .NET ──────────────────────────────────────────────────────────────────────
+# Build output
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+out/
+bld/
+artifacts/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+project.lock.json
+project.fragment.lock.json
+
+# MSBuild
+*.binlog
+
+# User-specific / IDE files
+*.user
+*.suo
+*.userprefs
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+.vscode/
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
+*.coverage
+coverage*/
+TestResult.xml
+nunit-*.xml
+*.VisualState.xml
+CodeCoverage/
+
+# Publish
+publish/
+**/Properties/PublishProfiles/
+
+# EF Core SQLite dev database (never commit)
+*.db
+*.db-shm
+*.db-wal
+
+# ASP.NET secrets
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+**/secrets.json
+
+# Scaffolding
+ScaffoldingReadMe.txt
+
+## ── OS ────────────────────────────────────────────────────────────────────────
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+~$*
+
+## ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+docker-compose.local.yml
+
+## ── Logs / temp ───────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.temp

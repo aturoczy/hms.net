@@ -1,0 +1,210 @@
+{
+  "id": null,
+  "uid": "hmsnet-metastore",
+  "title": "Hmsnet Metastore",
+  "tags": ["hmsnet", "metastore", "dotnet"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_request_duration_seconds_count{job=\"hmsnet-metastore\"}[1m])) by (http_route)",
+          "legendFormat": "{{http_route}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP P99 Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_request_duration_seconds_bucket{job=\"hmsnet-metastore\"}[1m])) by (le, http_route))",
+          "legendFormat": "p99 {{http_route}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "HTTP Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_request_duration_seconds_count{job=\"hmsnet-metastore\",http_response_status_code=~\"5..\"}[1m]))",
+          "legendFormat": "5xx errors",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(http_server_request_duration_seconds_count{job=\"hmsnet-metastore\",http_response_status_code=~\"4..\"}[1m]))",
+          "legendFormat": "4xx errors",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "GC Pause Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(process_runtime_dotnet_gc_pause_ratio_total{job=\"hmsnet-metastore\"}[1m])",
+          "legendFormat": "GC Pause Ratio",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": ".NET Thread Pool Queue Length",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "dotnet_thread_pool_queue_length{job=\"hmsnet-metastore\"}",
+          "legendFormat": "Queue Length",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Active HTTP Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 100, "color": "yellow" },
+              { "value": 500, "color": "red" }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(http_server_active_requests{job=\"hmsnet-metastore\"})",
+          "legendFormat": "Active Requests",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Process Memory (Working Set)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 16 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 500000000, "color": "yellow" },
+              { "value": 1000000000, "color": "red" }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "process_working_set_bytes{job=\"hmsnet-metastore\"}",
+          "legendFormat": "Working Set",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "GC Collections per Minute",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(process_runtime_dotnet_gc_collections_count_total{job=\"hmsnet-metastore\"}[1m]) * 60",
+          "legendFormat": "Gen {{generation}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Recent Traces (Jaeger)",
+      "type": "traces",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "datasource": "Jaeger",
+      "targets": [
+        {
+          "datasource": "Jaeger",
+          "refId": "A",
+          "service": "Hmsnet",
+          "queryType": "search",
+          "limit": 20
+        }
+      ]
+    }
+  ]
+}

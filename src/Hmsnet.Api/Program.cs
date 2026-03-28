@@ -1,0 +1,100 @@
+using Hmsnet.Api.Thrift;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Scalar.AspNetCore;
+using Hmsnet.Core.Interfaces;
+using Hmsnet.Infrastructure.Data;
+using Hmsnet.Infrastructure.Services;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ── EF Core ───────────────────────────────────────────────────────────────────
+var provider = builder.Configuration["Database:Provider"] ?? "sqlite";
+var connectionString = builder.Configuration.GetConnectionString("Metastore")
+    ?? "Data Source=metastore.db";
+
+builder.Services.AddDbContext<MetastoreDbContext>(opts =>
+{
+    _ = provider.ToLowerInvariant() switch
+    {
+        "postgresql" or "postgres" => opts.UseNpgsql(connectionString,
+            npg => npg.MigrationsAssembly("Hmsnet.Infrastructure")),
+        _ => opts.UseSqlite(connectionString,
+            sq => sq.MigrationsAssembly("Hmsnet.Infrastructure"))
+    };
+});
+
+// ── Services ──────────────────────────────────────────────────────────────────
+builder.Services.AddScoped<IDatabaseService, DatabaseService>();
+builder.Services.AddScoped<ITableService, TableService>();
+builder.Services.AddScoped<IPartitionService, PartitionService>();
+builder.Services.AddScoped<IColumnStatisticsService, ColumnStatisticsService>();
+builder.Services.AddScoped<ThriftHmsHandler>();
+
+// ── Thrift server ─────────────────────────────────────────────────────────────
+builder.Services.Configure<ThriftServerOptions>(builder.Configuration.GetSection("Thrift"));
+builder.Services.AddHostedService<ThriftMetastoreServer>();
+
+// ── OpenTelemetry ─────────────────────────────────────────────────────────────
+var otlpEndpoint = builder.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
+
+var resourceBuilder = ResourceBuilder.CreateDefault()
+    .AddService(
+        serviceName: "Hmsnet",
+        serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0")
+    .AddAttributes([
+        new("deployment.environment", builder.Environment.EnvironmentName),
+        new("host.name", Environment.MachineName)
+    ]);
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation(opts =>
+        {
+            opts.RecordException = true;
+            opts.Filter = ctx =>
+                // skip health checks and OpenAPI/Scalar noise
+                !ctx.Request.Path.StartsWithSegments("/openapi") &&
+                !ctx.Request.Path.StartsWithSegments("/scalar");
+        })
+        .AddHttpClientInstrumentation(opts => opts.RecordException = true)
+        // EF Core has built-in activity sources since EF 8
+        .AddSource("Microsoft.EntityFrameworkCore")
+        .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint))
+        .AddConsoleExporter())
+    .WithMetrics(metrics => metrics
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()  // GC, thread pool, memory
+        .AddMeter("Hmsnet") // custom app meter (reserved for future use)
+        .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
+
+// ── Web API ───────────────────────────────────────────────────────────────────
+builder.Services.AddControllers();
+builder.Services.AddOpenApi();
+
+var app = builder.Build();
+
+// ── Auto-migrate on startup ───────────────────────────────────────────────────
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<MetastoreDbContext>();
+    await db.Database.MigrateAsync();
+}
+
+// ── Middleware ────────────────────────────────────────────────────────────────
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();          // serves /openapi/v1.json
+    app.MapScalarApiReference(); // serves /scalar/v1 (interactive UI)
+}
+
+app.UseHttpsRedirection();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();

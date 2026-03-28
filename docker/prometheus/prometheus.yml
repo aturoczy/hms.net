@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # OTel Collector exposes all app metrics (forwarded from the .NET app via OTLP)
+  - job_name: "hmsnet-metastore"
+    static_configs:
+      - targets: ["otel-collector:8889"]
+    metrics_path: /metrics

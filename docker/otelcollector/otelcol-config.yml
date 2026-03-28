@@ -1,0 +1,50 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+
+exporters:
+  # Forward traces to Jaeger via OTLP
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Expose metrics for Prometheus to scrape
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: hmsnet
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Collector's own health/debug logs
+  debug:
+    verbosity: normal
+
+service:
+  telemetry:
+    logs:
+      level: "info"
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
