@@ -15,6 +15,7 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
     public DbSet<StorageDescriptor> StorageDescriptors => Set<StorageDescriptor>();
     public DbSet<SerDeInfo> SerDeInfos => Set<SerDeInfo>();
     public DbSet<ColumnStatistics> ColumnStatistics => Set<ColumnStatistics>();
+    public DbSet<IcebergTableMetadata> IcebergMetadata => Set<IcebergTableMetadata>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
@@ -160,6 +161,20 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
             e.HasOne(p => p.StorageDescriptor)
                 .WithOne(sd => sd.Partition)
                 .HasForeignKey<HivePartition>(p => p.StorageDescriptorId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── IcebergTableMetadata ──────────────────────────────────────────────
+        mb.Entity<IcebergTableMetadata>(e =>
+        {
+            e.HasKey(m => m.Id);
+            e.HasIndex(m => m.HiveTableId).IsUnique();
+            e.Property(m => m.MetadataLocation).HasMaxLength(4096).IsRequired();
+            e.Property(m => m.MetadataJson).IsRequired();
+
+            e.HasOne(m => m.HiveTable)
+                .WithOne()
+                .HasForeignKey<IcebergTableMetadata>(m => m.HiveTableId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

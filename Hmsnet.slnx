@@ -4,5 +4,7 @@
     <Project Path="src/Hmsnet.Core/Hmsnet.Core.csproj" />
     <Project Path="src/Hmsnet.Infrastructure/Hmsnet.Infrastructure.csproj" />
     <Project Path="tests/Hmsnet.Tests/Hmsnet.Tests.csproj" />
+    <Project Path="src/Hmsnet.Iceberg/Hmsnet.Iceberg.csproj" />
+    <Project Path="tests/Hmsnet.Iceberg.Tests/Hmsnet.Iceberg.Tests.csproj" />
   </Folder>
 </Solution>
