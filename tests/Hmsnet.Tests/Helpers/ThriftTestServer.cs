@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using Hmsnet.Api.Thrift;
 using Hmsnet.Core.Interfaces;
 using Hmsnet.Infrastructure.Data;
+using Hmsnet.Infrastructure.Features.Databases;
 using Hmsnet.Infrastructure.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -55,6 +56,8 @@ public sealed class ThriftTestServer : IAsyncDisposable
         builder.Services.AddScoped<IPartitionService, PartitionService>();
         builder.Services.AddScoped<IColumnStatisticsService, ColumnStatisticsService>();
         builder.Services.AddScoped<ThriftHmsHandler>();
+        builder.Services.AddMediatR(cfg =>
+            cfg.RegisterServicesFromAssembly(typeof(CreateDatabaseHandler).Assembly));
 
         builder.Services.Configure<ThriftServerOptions>(opts => opts.Port = port);
         builder.Services.AddHostedService<ThriftMetastoreServer>();

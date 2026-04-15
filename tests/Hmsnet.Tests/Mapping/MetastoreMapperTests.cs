@@ -3,7 +3,7 @@ using Hmsnet.Core.Mapping;
 using Hmsnet.Core.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Hmsnet.Tests;
+namespace Hmsnet.Tests.Mapping;
 
 [TestClass]
 public class MetastoreMapperTests

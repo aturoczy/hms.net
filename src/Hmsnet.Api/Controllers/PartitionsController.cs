@@ -1,14 +1,16 @@
 using Hmsnet.Core.DTOs;
 using Hmsnet.Core.Exceptions;
-using Hmsnet.Core.Interfaces;
+using Hmsnet.Core.Features.Partitions.Commands;
+using Hmsnet.Core.Features.Partitions.Queries;
 using Hmsnet.Core.Mapping;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Hmsnet.Api.Controllers;
 
 [ApiController]
 [Route("api/databases/{dbName}/tables/{tableName}/partitions")]
-public class PartitionsController(IPartitionService svc, ITableService tableSvc) : ControllerBase
+public class PartitionsController(ISender sender) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<PartitionResponse>>(StatusCodes.Status200OK)]
@@ -22,27 +24,19 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     {
         try
         {
-            var partKeys = (await tableSvc.GetSchemaAsync(dbName, tableName, ct))
-                .Where(c => c.IsPartitionKey).OrderBy(c => c.OrdinalPosition).ToList();
-
             if (namesOnly)
             {
                 var names = filter is not null
-                    ? await svc.GetPartitionNamesByFilterAsync(dbName, tableName, filter, maxParts, ct)
-                    : await svc.GetPartitionNamesAsync(dbName, tableName, maxParts, ct);
+                    ? await sender.Send(new GetPartitionNamesByFilterQuery(dbName, tableName, filter, maxParts), ct)
+                    : await sender.Send(new GetPartitionNamesQuery(dbName, tableName, maxParts), ct);
                 return Ok(names);
             }
 
-            var partitions = filter is not null
-                ? await svc.GetPartitionsByFilterAsync(dbName, tableName, filter, maxParts, ct)
-                : await svc.GetPartitionsAsync(dbName, tableName, maxParts, ct);
+            var result = filter is not null
+                ? await sender.Send(new GetPartitionsByFilterQuery(dbName, tableName, filter, maxParts), ct)
+                : await sender.Send(new GetPartitionsQuery(dbName, tableName, maxParts), ct);
 
-            var pKeys = partKeys.Select(c => new Hmsnet.Core.Models.HiveColumn
-            {
-                Name = c.Name, TypeName = c.TypeName, OrdinalPosition = c.OrdinalPosition, IsPartitionKey = true
-            }).ToList();
-
-            return Ok(partitions.Select(p => p.ToDto(pKeys)));
+            return Ok(result.Partitions.Select(p => p.ToDto(result.PartitionKeys)));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
     }
@@ -51,7 +45,7 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     [ProducesResponseType<int>(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetPartitionCount(string dbName, string tableName, CancellationToken ct)
     {
-        try { return Ok(await svc.GetPartitionCountAsync(dbName, tableName, ct)); }
+        try { return Ok(await sender.Send(new GetPartitionCountQuery(dbName, tableName), ct)); }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
     }
 
@@ -65,14 +59,9 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     {
         try
         {
-            var p = await svc.GetPartitionAsync(dbName, tableName, values, ct);
-            if (p is null) return NotFound("Partition not found.");
-
-            var partKeys = (await tableSvc.GetSchemaAsync(dbName, tableName, ct))
-                .Where(c => c.IsPartitionKey).OrderBy(c => c.OrdinalPosition)
-                .Select(c => new Hmsnet.Core.Models.HiveColumn { Name = c.Name, OrdinalPosition = c.OrdinalPosition })
-                .ToList();
-            return Ok(p.ToDto(partKeys));
+            var result = await sender.Send(new GetPartitionByValuesQuery(dbName, tableName, values), ct);
+            if (result is null) return NotFound("Partition not found.");
+            return Ok(result.Partition.ToDto(result.PartitionKeys));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
     }
@@ -85,14 +74,9 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     {
         try
         {
-            var p = await svc.GetPartitionByNameAsync(dbName, tableName, partitionName, ct);
-            if (p is null) return NotFound("Partition not found.");
-
-            var partKeys = (await tableSvc.GetSchemaAsync(dbName, tableName, ct))
-                .Where(c => c.IsPartitionKey).OrderBy(c => c.OrdinalPosition)
-                .Select(c => new Hmsnet.Core.Models.HiveColumn { Name = c.Name, OrdinalPosition = c.OrdinalPosition })
-                .ToList();
-            return Ok(p.ToDto(partKeys));
+            var result = await sender.Send(new GetPartitionByNameQuery(dbName, tableName, partitionName), ct);
+            if (result is null) return NotFound("Partition not found.");
+            return Ok(result.Partition.ToDto(result.PartitionKeys));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
     }
@@ -106,15 +90,11 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     {
         try
         {
-            var p = await svc.AddPartitionAsync(dbName, tableName, request.ToModel(), ct);
-            var partKeys = (await tableSvc.GetSchemaAsync(dbName, tableName, ct))
-                .Where(c => c.IsPartitionKey).OrderBy(c => c.OrdinalPosition)
-                .Select(c => new Hmsnet.Core.Models.HiveColumn { Name = c.Name, OrdinalPosition = c.OrdinalPosition })
-                .ToList();
-            var partName = MetastoreMapper.BuildPartitionName(partKeys, p.Values);
+            var result = await sender.Send(new AddPartitionCommand(dbName, tableName, request.ToModel()), ct);
+            var partName = MetastoreMapper.BuildPartitionName(result.PartitionKeys, result.Partition.Values);
             return CreatedAtAction(nameof(GetPartitionByName),
                 new { dbName, tableName, partitionName = partName },
-                p.ToDto(partKeys));
+                result.Partition.ToDto(result.PartitionKeys));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
         catch (AlreadyExistsException ex) { return Conflict(ex.Message); }
@@ -129,12 +109,8 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
         try
         {
             var models = requests.Select(r => r.ToModel()).ToList();
-            var partitions = await svc.AddPartitionsAsync(dbName, tableName, models, ct);
-            var partKeys = (await tableSvc.GetSchemaAsync(dbName, tableName, ct))
-                .Where(c => c.IsPartitionKey).OrderBy(c => c.OrdinalPosition)
-                .Select(c => new Hmsnet.Core.Models.HiveColumn { Name = c.Name, OrdinalPosition = c.OrdinalPosition })
-                .ToList();
-            return Ok(partitions.Select(p => p.ToDto(partKeys)));
+            var result = await sender.Send(new AddPartitionsCommand(dbName, tableName, models), ct);
+            return Ok(result.Partitions.Select(p => p.ToDto(result.PartitionKeys)));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
         catch (Core.Exceptions.InvalidOperationException ex) { return BadRequest(ex.Message); }
@@ -148,12 +124,8 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     {
         try
         {
-            var updated = await svc.AlterPartitionAsync(dbName, tableName, request.ToModel(), ct);
-            var partKeys = (await tableSvc.GetSchemaAsync(dbName, tableName, ct))
-                .Where(c => c.IsPartitionKey).OrderBy(c => c.OrdinalPosition)
-                .Select(c => new Hmsnet.Core.Models.HiveColumn { Name = c.Name, OrdinalPosition = c.OrdinalPosition })
-                .ToList();
-            return Ok(updated.ToDto(partKeys));
+            var result = await sender.Send(new AlterPartitionCommand(dbName, tableName, request.ToModel()), ct);
+            return Ok(result.Partition.ToDto(result.PartitionKeys));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
     }
@@ -169,7 +141,7 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     {
         try
         {
-            var dropped = await svc.DropPartitionAsync(dbName, tableName, values, deleteData, ct);
+            var dropped = await sender.Send(new DropPartitionCommand(dbName, tableName, values, deleteData), ct);
             return dropped ? NoContent() : NotFound("Partition not found.");
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
@@ -185,7 +157,7 @@ public class PartitionsController(IPartitionService svc, ITableService tableSvc)
     {
         try
         {
-            var dropped = await svc.DropPartitionByNameAsync(dbName, tableName, partitionName, deleteData, ct);
+            var dropped = await sender.Send(new DropPartitionByNameCommand(dbName, tableName, partitionName, deleteData), ct);
             return dropped ? NoContent() : NotFound("Partition not found.");
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }

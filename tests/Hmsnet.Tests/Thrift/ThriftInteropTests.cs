@@ -1,7 +1,7 @@
 using Hmsnet.Api.Thrift;
 using Hmsnet.Tests.Helpers;
 
-namespace Hmsnet.Tests;
+namespace Hmsnet.Tests.Thrift;
 
 [TestClass]
 [DoNotParallelize]

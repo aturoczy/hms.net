@@ -1,13 +1,15 @@
 using Hmsnet.Core.DTOs;
 using Hmsnet.Core.Exceptions;
-using Hmsnet.Core.Interfaces;
+using Hmsnet.Core.Features.ColumnStatistics.Commands;
+using Hmsnet.Core.Features.ColumnStatistics.Queries;
 using Hmsnet.Core.Mapping;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Hmsnet.Api.Controllers;
 
 [ApiController]
-public class ColumnStatisticsController(IColumnStatisticsService svc) : ControllerBase
+public class ColumnStatisticsController(ISender sender) : ControllerBase
 {
     // ── Table statistics ──────────────────────────────────────────────────────
 
@@ -20,7 +22,7 @@ public class ColumnStatisticsController(IColumnStatisticsService svc) : Controll
     {
         try
         {
-            var stats = await svc.GetTableColumnStatisticsAsync(dbName, tableName, columns, ct);
+            var stats = await sender.Send(new GetTableStatsQuery(dbName, tableName, columns), ct);
             return Ok(stats.Select(s => s.ToDto()));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
@@ -35,7 +37,7 @@ public class ColumnStatisticsController(IColumnStatisticsService svc) : Controll
     {
         try
         {
-            await svc.UpdateTableColumnStatisticsAsync(dbName, tableName, statsDto.Select(s => s.ToModel()), ct);
+            await sender.Send(new UpdateTableStatsCommand(dbName, tableName, statsDto.Select(s => s.ToModel())), ct);
             return NoContent();
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
@@ -50,7 +52,7 @@ public class ColumnStatisticsController(IColumnStatisticsService svc) : Controll
     {
         try
         {
-            await svc.DeleteTableColumnStatisticsAsync(dbName, tableName, column, ct);
+            await sender.Send(new DeleteTableStatsCommand(dbName, tableName, column), ct);
             return NoContent();
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
@@ -68,7 +70,7 @@ public class ColumnStatisticsController(IColumnStatisticsService svc) : Controll
     {
         try
         {
-            var stats = await svc.GetPartitionColumnStatisticsAsync(dbName, tableName, values, columns, ct);
+            var stats = await sender.Send(new GetPartitionStatsQuery(dbName, tableName, values, columns), ct);
             return Ok(stats.Select(s => s.ToDto()));
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
@@ -84,7 +86,7 @@ public class ColumnStatisticsController(IColumnStatisticsService svc) : Controll
     {
         try
         {
-            await svc.UpdatePartitionColumnStatisticsAsync(dbName, tableName, values, statsDto.Select(s => s.ToModel()), ct);
+            await sender.Send(new UpdatePartitionStatsCommand(dbName, tableName, values, statsDto.Select(s => s.ToModel())), ct);
             return NoContent();
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
@@ -100,7 +102,7 @@ public class ColumnStatisticsController(IColumnStatisticsService svc) : Controll
     {
         try
         {
-            await svc.DeletePartitionColumnStatisticsAsync(dbName, tableName, values, column, ct);
+            await sender.Send(new DeletePartitionStatsCommand(dbName, tableName, values, column), ct);
             return NoContent();
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }

@@ -1,7 +1,7 @@
 using Hmsnet.Api.Thrift;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Hmsnet.Tests;
+namespace Hmsnet.Tests.Thrift;
 
 /// <summary>
 /// Tests for the hand-rolled Thrift binary protocol implementation.

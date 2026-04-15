@@ -1,9 +1,11 @@
-using System.Text.Json;
-using Hmsnet.Core.DTOs;
-using Hmsnet.Core.Exceptions;
-using Hmsnet.Core.Interfaces;
-using Hmsnet.Core.Mapping;
+using Hmsnet.Core.Features.Databases.Commands;
+using Hmsnet.Core.Features.Databases.Queries;
+using Hmsnet.Core.Features.Partitions.Commands;
+using Hmsnet.Core.Features.Partitions.Queries;
+using Hmsnet.Core.Features.Tables.Commands;
+using Hmsnet.Core.Features.Tables.Queries;
 using Hmsnet.Core.Models;
+using MediatR;
 
 namespace Hmsnet.Api.Thrift;
 
@@ -14,32 +16,27 @@ namespace Hmsnet.Api.Thrift;
 /// represented as plain C# classes (generated Thrift types would normally
 /// come from running thrift --gen csharp hive_metastore.thrift).
 /// </summary>
-public class ThriftHmsHandler(
-    IDatabaseService dbSvc,
-    ITableService tableSvc,
-    IPartitionService partSvc,
-    IColumnStatisticsService statsSvc,
-    ILogger<ThriftHmsHandler> logger)
+public class ThriftHmsHandler(ISender sender, ILogger<ThriftHmsHandler> logger)
 {
     // ── Database operations ───────────────────────────────────────────────────
 
     public async Task CreateDatabaseAsync(ThriftDatabase db, CancellationToken ct)
     {
         logger.LogDebug("Thrift: create_database {Name}", db.Name);
-        await dbSvc.CreateDatabaseAsync(new HiveDatabase
+        await sender.Send(new CreateDatabaseCommand(new HiveDatabase
         {
             Name = db.Name,
             Description = db.Description,
             LocationUri = db.LocationUri ?? $"hdfs:///user/hive/warehouse/{db.Name}.db",
             OwnerName = db.OwnerName,
             Parameters = db.Parameters ?? []
-        }, ct);
+        }), ct);
     }
 
     public async Task<ThriftDatabase?> GetDatabaseAsync(string name, CancellationToken ct)
     {
         logger.LogDebug("Thrift: get_database {Name}", name);
-        var db = await dbSvc.GetDatabaseAsync(name, ct);
+        var db = await sender.Send(new GetDatabaseQuery(name), ct);
         if (db is null) return null;
         return new ThriftDatabase(db.Name, db.Description, db.LocationUri, db.OwnerName, db.Parameters);
     }
@@ -47,13 +44,13 @@ public class ThriftHmsHandler(
     public async Task<IReadOnlyList<string>> GetAllDatabasesAsync(CancellationToken ct)
     {
         logger.LogDebug("Thrift: get_all_databases");
-        return await dbSvc.GetAllDatabaseNamesAsync(ct);
+        return await sender.Send(new GetAllDatabaseNamesQuery(), ct);
     }
 
     public async Task DropDatabaseAsync(string name, bool deleteData, bool cascade, CancellationToken ct)
     {
         logger.LogDebug("Thrift: drop_database {Name} cascade={Cascade}", name, cascade);
-        await dbSvc.DropDatabaseAsync(name, cascade, ct);
+        await sender.Send(new DropDatabaseCommand(name, cascade), ct);
     }
 
     // ── Table operations ──────────────────────────────────────────────────────
@@ -63,51 +60,51 @@ public class ThriftHmsHandler(
         logger.LogDebug("Thrift: create_table {Db}.{Table}", table.DbName, table.TableName);
         var model = MapThriftTable(table);
         model.Database = new HiveDatabase { Name = table.DbName };
-        await tableSvc.CreateTableAsync(model, ct);
+        await sender.Send(new CreateTableCommand(model), ct);
     }
 
     public async Task<ThriftTable?> GetTableAsync(string dbName, string tableName, CancellationToken ct)
     {
         logger.LogDebug("Thrift: get_table {Db}.{Table}", dbName, tableName);
-        var t = await tableSvc.GetTableAsync(dbName, tableName, ct);
+        var t = await sender.Send(new GetTableQuery(dbName, tableName), ct);
         return t is null ? null : MapToThriftTable(t);
     }
 
     public async Task<IReadOnlyList<string>> GetAllTablesAsync(string dbName, CancellationToken ct)
     {
         logger.LogDebug("Thrift: get_all_tables {Db}", dbName);
-        return await tableSvc.GetAllTableNamesAsync(dbName, ct);
+        return await sender.Send(new GetAllTableNamesQuery(dbName), ct);
     }
 
     public async Task<IReadOnlyList<string>> GetTablesAsync(string dbName, string pattern, CancellationToken ct)
     {
         logger.LogDebug("Thrift: get_tables {Db} pattern={Pattern}", dbName, pattern);
-        return await tableSvc.GetTableNamesLikeAsync(dbName, pattern, ct);
+        return await sender.Send(new GetTableNamesLikeQuery(dbName, pattern), ct);
     }
 
     public async Task DropTableAsync(string dbName, string tableName, bool deleteData, CancellationToken ct)
     {
         logger.LogDebug("Thrift: drop_table {Db}.{Table}", dbName, tableName);
-        await tableSvc.DropTableAsync(dbName, tableName, deleteData, ct);
+        await sender.Send(new DropTableCommand(dbName, tableName, deleteData), ct);
     }
 
     public async Task AlterTableAsync(string dbName, string tableName, ThriftTable newTable, CancellationToken ct)
     {
         logger.LogDebug("Thrift: alter_table {Db}.{Table}", dbName, tableName);
-        await tableSvc.AlterTableAsync(dbName, tableName, MapThriftTable(newTable), ct);
+        await sender.Send(new AlterTableCommand(dbName, tableName, MapThriftTable(newTable)), ct);
     }
 
     // ── Schema operations ─────────────────────────────────────────────────────
 
     public async Task<IReadOnlyList<ThriftFieldSchema>> GetFieldsAsync(string dbName, string tableName, CancellationToken ct)
     {
-        var cols = await tableSvc.GetFieldsAsync(dbName, tableName, ct);
+        var cols = await sender.Send(new GetFieldsQuery(dbName, tableName), ct);
         return cols.Select(MapToThriftField).ToList();
     }
 
     public async Task<IReadOnlyList<ThriftFieldSchema>> GetSchemaAsync(string dbName, string tableName, CancellationToken ct)
     {
-        var cols = await tableSvc.GetSchemaAsync(dbName, tableName, ct);
+        var cols = await sender.Send(new GetSchemaQuery(dbName, tableName), ct);
         return cols.Select(MapToThriftField).ToList();
     }
 
@@ -117,8 +114,8 @@ public class ThriftHmsHandler(
     {
         logger.LogDebug("Thrift: add_partition {Db}.{Table}", partition.DbName, partition.TableName);
         var model = MapThriftPartition(partition);
-        var result = await partSvc.AddPartitionAsync(partition.DbName, partition.TableName, model, ct);
-        partition.CreateTime = (int)result.CreateTime;
+        var result = await sender.Send(new AddPartitionCommand(partition.DbName, partition.TableName, model), ct);
+        partition.CreateTime = (int)result.Partition.CreateTime;
         return partition;
     }
 
@@ -132,30 +129,30 @@ public class ThriftHmsHandler(
 
     public async Task<ThriftPartition?> GetPartitionAsync(string dbName, string tableName, IList<string> values, CancellationToken ct)
     {
-        var p = await partSvc.GetPartitionAsync(dbName, tableName, values, ct);
-        return p is null ? null : MapToThriftPartition(p, dbName, tableName);
+        var result = await sender.Send(new GetPartitionByValuesQuery(dbName, tableName, values.ToList()), ct);
+        return result is null ? null : MapToThriftPartition(result.Partition, dbName, tableName);
     }
 
     public async Task<IReadOnlyList<ThriftPartition>> GetPartitionsAsync(string dbName, string tableName, int maxParts, CancellationToken ct)
     {
-        var parts = await partSvc.GetPartitionsAsync(dbName, tableName, maxParts, ct);
-        return parts.Select(p => MapToThriftPartition(p, dbName, tableName)).ToList();
+        var result = await sender.Send(new GetPartitionsQuery(dbName, tableName, maxParts), ct);
+        return result.Partitions.Select(p => MapToThriftPartition(p, dbName, tableName)).ToList();
     }
 
     public async Task<IReadOnlyList<string>> GetPartitionNamesAsync(string dbName, string tableName, int maxParts, CancellationToken ct) =>
-        await partSvc.GetPartitionNamesAsync(dbName, tableName, maxParts, ct);
+        await sender.Send(new GetPartitionNamesQuery(dbName, tableName, maxParts), ct);
 
     public async Task<IReadOnlyList<ThriftPartition>> GetPartitionsByFilterAsync(string dbName, string tableName, string filter, int maxParts, CancellationToken ct)
     {
-        var parts = await partSvc.GetPartitionsByFilterAsync(dbName, tableName, filter, maxParts, ct);
-        return parts.Select(p => MapToThriftPartition(p, dbName, tableName)).ToList();
+        var result = await sender.Send(new GetPartitionsByFilterQuery(dbName, tableName, filter, maxParts), ct);
+        return result.Partitions.Select(p => MapToThriftPartition(p, dbName, tableName)).ToList();
     }
 
     public async Task<bool> DropPartitionAsync(string dbName, string tableName, IList<string> values, bool deleteData, CancellationToken ct) =>
-        await partSvc.DropPartitionAsync(dbName, tableName, values, deleteData, ct);
+        await sender.Send(new DropPartitionCommand(dbName, tableName, values.ToList(), deleteData), ct);
 
     public async Task AlterPartitionAsync(string dbName, string tableName, ThriftPartition partition, CancellationToken ct) =>
-        await partSvc.AlterPartitionAsync(dbName, tableName, MapThriftPartition(partition), ct);
+        await sender.Send(new AlterPartitionCommand(dbName, tableName, MapThriftPartition(partition)), ct);
 
     // ── Mapping helpers ───────────────────────────────────────────────────────
 

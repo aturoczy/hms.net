@@ -1,14 +1,16 @@
 using Hmsnet.Core.DTOs;
 using Hmsnet.Core.Exceptions;
-using Hmsnet.Core.Interfaces;
+using Hmsnet.Core.Features.Databases.Commands;
+using Hmsnet.Core.Features.Databases.Queries;
 using Hmsnet.Core.Mapping;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Hmsnet.Api.Controllers;
 
 [ApiController]
 [Route("api/databases")]
-public class DatabasesController(IDatabaseService svc) : ControllerBase
+public class DatabasesController(ISender sender) : ControllerBase
 {
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<string>>(StatusCodes.Status200OK)]
@@ -16,9 +18,9 @@ public class DatabasesController(IDatabaseService svc) : ControllerBase
         [FromQuery] bool namesOnly = true, CancellationToken ct = default)
     {
         if (namesOnly)
-            return Ok(await svc.GetAllDatabaseNamesAsync(ct));
+            return Ok(await sender.Send(new GetAllDatabaseNamesQuery(), ct));
 
-        var dbs = await svc.GetAllDatabasesAsync(ct);
+        var dbs = await sender.Send(new GetAllDatabasesQuery(), ct);
         return Ok(dbs.Select(d => d.ToDto()));
     }
 
@@ -27,7 +29,7 @@ public class DatabasesController(IDatabaseService svc) : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetDatabase(string name, CancellationToken ct)
     {
-        var db = await svc.GetDatabaseAsync(name, ct);
+        var db = await sender.Send(new GetDatabaseQuery(name), ct);
         return db is null ? NotFound($"Database '{name}' not found.") : Ok(db.ToDto());
     }
 
@@ -38,7 +40,7 @@ public class DatabasesController(IDatabaseService svc) : ControllerBase
     {
         try
         {
-            var db = await svc.CreateDatabaseAsync(request.ToModel(), ct);
+            var db = await sender.Send(new CreateDatabaseCommand(request.ToModel()), ct);
             return CreatedAtAction(nameof(GetDatabase), new { name = db.Name }, db.ToDto());
         }
         catch (AlreadyExistsException ex)
@@ -54,7 +56,7 @@ public class DatabasesController(IDatabaseService svc) : ControllerBase
     {
         try
         {
-            var db = await svc.AlterDatabaseAsync(name, request.ToModel(), ct);
+            var db = await sender.Send(new AlterDatabaseCommand(name, request.ToModel()), ct);
             return Ok(db.ToDto());
         }
         catch (NoSuchObjectException ex)
@@ -72,7 +74,7 @@ public class DatabasesController(IDatabaseService svc) : ControllerBase
     {
         try
         {
-            await svc.DropDatabaseAsync(name, cascade, ct);
+            await sender.Send(new DropDatabaseCommand(name, cascade), ct);
             return NoContent();
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
@@ -82,5 +84,5 @@ public class DatabasesController(IDatabaseService svc) : ControllerBase
     [HttpGet("{name}/exists")]
     [ProducesResponseType<bool>(StatusCodes.Status200OK)]
     public async Task<IActionResult> DatabaseExists(string name, CancellationToken ct) =>
-        Ok(await svc.DatabaseExistsAsync(name, ct));
+        Ok(await sender.Send(new DatabaseExistsQuery(name), ct));
 }

@@ -5,6 +5,7 @@ using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using Hmsnet.Core.Interfaces;
 using Hmsnet.Infrastructure.Data;
+using Hmsnet.Infrastructure.Features.Databases;
 using Hmsnet.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -32,6 +33,8 @@ builder.Services.AddScoped<ITableService, TableService>();
 builder.Services.AddScoped<IPartitionService, PartitionService>();
 builder.Services.AddScoped<IColumnStatisticsService, ColumnStatisticsService>();
 builder.Services.AddScoped<ThriftHmsHandler>();
+builder.Services.AddMediatR(cfg =>
+    cfg.RegisterServicesFromAssembly(typeof(CreateDatabaseHandler).Assembly));
 
 // ── Thrift server ─────────────────────────────────────────────────────────────
 builder.Services.Configure<ThriftServerOptions>(builder.Configuration.GetSection("Thrift"));

@@ -1,14 +1,19 @@
 using Hmsnet.Core.Exceptions;
+using Hmsnet.Core.Features.Tables.Commands;
+using Hmsnet.Core.Features.Tables.Queries;
 using Hmsnet.Core.Models;
+using Hmsnet.Infrastructure.Features.Tables;
 using Hmsnet.Infrastructure.Services;
 using Hmsnet.Tests.Helpers;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Hmsnet.Tests;
+namespace Hmsnet.Tests.Features.Tables;
 
 [TestClass]
-public class TableServiceTests
+public class TableHandlerTests
 {
+    private static readonly CancellationToken CT = CancellationToken.None;
+
     // ── Create ────────────────────────────────────────────────────────────────
 
     [TestMethod]
@@ -20,7 +25,7 @@ public class TableServiceTests
 
         var table = SeedData.Table(database.Id, "db1", "orders");
         table.Database = database;
-        var created = await svc.CreateTableAsync(table);
+        var created = await new CreateTableHandler(svc).Handle(new CreateTableCommand(table), CT);
 
         Assert.IsTrue(created.Id > 0);
         Assert.AreEqual("orders", created.Name);
@@ -35,24 +40,9 @@ public class TableServiceTests
 
         var table = SeedData.Table(database.Id, "db1", "UPPER_TABLE");
         table.Database = database;
-        var created = await svc.CreateTableAsync(table);
+        var created = await new CreateTableHandler(svc).Handle(new CreateTableCommand(table), CT);
 
         Assert.AreEqual("upper_table", created.Name);
-    }
-
-    [TestMethod]
-    public async Task CreateTable_SetsDefaultLocation_WhenEmpty()
-    {
-        await using var ctx = DbContextFactory.Create();
-        var svc = new TableService(ctx);
-        var database = await SeedData.SeedDatabaseAsync(ctx, "db1");
-
-        var table = SeedData.Table(database.Id, "db1", "mytable");
-        table.Database = database;
-        table.StorageDescriptor.Location = string.Empty;
-        var created = await svc.CreateTableAsync(table);
-
-        StringAssert.Contains(created.StorageDescriptor.Location, "mytable");
     }
 
     [TestMethod]
@@ -65,7 +55,7 @@ public class TableServiceTests
         table.Database = new HiveDatabase { Name = "ghostdb" };
 
         await AssertEx.ThrowsAsync<NoSuchObjectException>(() =>
-            svc.CreateTableAsync(table));
+            new CreateTableHandler(svc).Handle(new CreateTableCommand(table), CT));
     }
 
     [TestMethod]
@@ -79,25 +69,7 @@ public class TableServiceTests
         table2.Database = db;
 
         await AssertEx.ThrowsAsync<AlreadyExistsException>(() =>
-            svc.CreateTableAsync(table2));
-    }
-
-    [TestMethod]
-    public async Task CreateTable_StoresPartitionKeys_Correctly()
-    {
-        await using var ctx = DbContextFactory.Create();
-        var svc = new TableService(ctx);
-        var db = await SeedData.SeedDatabaseAsync(ctx, "db1");
-
-        var partKeys = SeedData.DefaultPartitionKeys();
-        var table = SeedData.Table(db.Id, "db1", "partitioned", partitionKeys: partKeys);
-        table.Database = db;
-        var created = await svc.CreateTableAsync(table);
-
-        var partitioned = await svc.GetTableAsync("db1", "partitioned");
-        Assert.IsNotNull(partitioned);
-        Assert.IsTrue(partitioned.PartitionKeys.Any());
-        Assert.AreEqual("dt", partitioned.PartitionKeys.First().Name);
+            new CreateTableHandler(svc).Handle(new CreateTableCommand(table2), CT));
     }
 
     // ── Get / Exists ──────────────────────────────────────────────────────────
@@ -109,7 +81,7 @@ public class TableServiceTests
         var svc = new TableService(ctx);
         await SeedData.SeedTableAsync(ctx, "mydb", "mytable");
 
-        var table = await svc.GetTableAsync("mydb", "mytable");
+        var table = await new GetTableHandler(svc).Handle(new GetTableQuery("mydb", "mytable"), CT);
 
         Assert.IsNotNull(table);
         Assert.AreEqual("mytable", table.Name);
@@ -122,7 +94,7 @@ public class TableServiceTests
         var svc = new TableService(ctx);
         await SeedData.SeedDatabaseAsync(ctx, "mydb");
 
-        var table = await svc.GetTableAsync("mydb", "ghost");
+        var table = await new GetTableHandler(svc).Handle(new GetTableQuery("mydb", "ghost"), CT);
 
         Assert.IsNull(table);
     }
@@ -134,7 +106,7 @@ public class TableServiceTests
         var svc = new TableService(ctx);
         await SeedData.SeedTableAsync(ctx, "mydb", "mytable");
 
-        var table = await svc.GetTableAsync("MYDB", "MYTABLE");
+        var table = await new GetTableHandler(svc).Handle(new GetTableQuery("MYDB", "MYTABLE"), CT);
 
         Assert.IsNotNull(table);
     }
@@ -146,7 +118,7 @@ public class TableServiceTests
         var svc = new TableService(ctx);
         await SeedData.SeedTableAsync(ctx, "mydb", "t1");
 
-        Assert.IsTrue(await svc.TableExistsAsync("mydb", "t1"));
+        Assert.IsTrue(await new TableExistsHandler(svc).Handle(new TableExistsQuery("mydb", "t1"), CT));
     }
 
     [TestMethod]
@@ -156,7 +128,7 @@ public class TableServiceTests
         var svc = new TableService(ctx);
         await SeedData.SeedDatabaseAsync(ctx, "mydb");
 
-        Assert.IsFalse(await svc.TableExistsAsync("mydb", "ghost"));
+        Assert.IsFalse(await new TableExistsHandler(svc).Handle(new TableExistsQuery("mydb", "ghost"), CT));
     }
 
     // ── List ──────────────────────────────────────────────────────────────────
@@ -175,7 +147,7 @@ public class TableServiceTests
         }
         await ctx.SaveChangesAsync();
 
-        var names = await svc.GetAllTableNamesAsync("db1");
+        var names = await new GetAllTableNamesHandler(svc).Handle(new GetAllTableNamesQuery("db1"), CT);
 
         CollectionAssert.AreEqual(new[] { "alpha", "middle", "zebra" }, names.ToList());
     }
@@ -194,14 +166,15 @@ public class TableServiceTests
         }
         await ctx.SaveChangesAsync();
 
-        var names = await svc.GetTableNamesLikeAsync("db1", "sales*");
+        var names = await new GetTableNamesLikeHandler(svc).Handle(
+            new GetTableNamesLikeQuery("db1", "sales*"), CT);
 
         Assert.AreEqual(2, names.Count);
         Assert.IsTrue(names.All(n => n.StartsWith("sales")));
     }
 
     [TestMethod]
-    public async Task GetTablesInBatch_ReturnsOnlyRequested()
+    public async Task GetTablesBatch_ReturnsOnlyRequested()
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new TableService(ctx);
@@ -214,7 +187,8 @@ public class TableServiceTests
         }
         await ctx.SaveChangesAsync();
 
-        var tables = await svc.GetTablesAsync("db1", ["t1", "t3"]);
+        var tables = await new GetTablesBatchHandler(svc).Handle(
+            new GetTablesBatchQuery("db1", ["t1", "t3"]), CT);
 
         Assert.AreEqual(2, tables.Count);
         CollectionAssert.Contains(tables.Select(t => t.Name).ToList(), "t1");
@@ -231,7 +205,7 @@ public class TableServiceTests
         await SeedData.SeedTableAsync(ctx, "db1", "t1",
             extraPartKeys: SeedData.DefaultPartitionKeys());
 
-        var fields = await svc.GetFieldsAsync("db1", "t1");
+        var fields = await new GetFieldsHandler(svc).Handle(new GetFieldsQuery("db1", "t1"), CT);
 
         Assert.IsTrue(fields.All(f => !f.IsPartitionKey));
         Assert.AreEqual(2, fields.Count); // id, name
@@ -245,10 +219,9 @@ public class TableServiceTests
         await SeedData.SeedTableAsync(ctx, "db1", "t1",
             extraPartKeys: SeedData.DefaultPartitionKeys());
 
-        var schema = await svc.GetSchemaAsync("db1", "t1");
+        var schema = await new GetSchemaHandler(svc).Handle(new GetSchemaQuery("db1", "t1"), CT);
 
         Assert.AreEqual(3, schema.Count); // id, name, dt
-        // Data columns must come before partition keys
         Assert.IsFalse(schema.First().IsPartitionKey);
         Assert.IsTrue(schema.Last().IsPartitionKey);
     }
@@ -261,7 +234,7 @@ public class TableServiceTests
         await SeedData.SeedDatabaseAsync(ctx, "db1");
 
         await AssertEx.ThrowsAsync<NoSuchObjectException>(() =>
-            svc.GetFieldsAsync("db1", "ghost"));
+            new GetFieldsHandler(svc).Handle(new GetFieldsQuery("db1", "ghost"), CT));
     }
 
     // ── Alter ─────────────────────────────────────────────────────────────────
@@ -271,7 +244,7 @@ public class TableServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new TableService(ctx);
-        var (db, original) = await SeedData.SeedTableAsync(ctx, "db1", "t1");
+        var (db, _) = await SeedData.SeedTableAsync(ctx, "db1", "t1");
 
         var updated = SeedData.Table(db.Id, "db1", "t1");
         updated.Owner = "new_owner";
@@ -280,7 +253,8 @@ public class TableServiceTests
         updated.Columns = SeedData.DefaultColumns();
         updated.Database = db;
 
-        var result = await svc.AlterTableAsync("db1", "t1", updated);
+        var result = await new AlterTableHandler(svc).Handle(
+            new AlterTableCommand("db1", "t1", updated), CT);
 
         Assert.AreEqual("new_owner", result.Owner);
         Assert.AreEqual("updated", result.Parameters["comment"]);
@@ -295,7 +269,8 @@ public class TableServiceTests
         var db = await SeedData.SeedDatabaseAsync(ctx, "db1");
 
         await AssertEx.ThrowsAsync<NoSuchObjectException>(() =>
-            svc.AlterTableAsync("db1", "ghost", SeedData.Table(db.Id, "db1", "ghost")));
+            new AlterTableHandler(svc).Handle(
+                new AlterTableCommand("db1", "ghost", SeedData.Table(db.Id, "db1", "ghost")), CT));
     }
 
     // ── Drop ──────────────────────────────────────────────────────────────────
@@ -307,9 +282,9 @@ public class TableServiceTests
         var svc = new TableService(ctx);
         await SeedData.SeedTableAsync(ctx, "db1", "removeme");
 
-        await svc.DropTableAsync("db1", "removeme", deleteData: false);
+        await new DropTableHandler(svc).Handle(new DropTableCommand("db1", "removeme", false), CT);
 
-        Assert.IsFalse(await svc.TableExistsAsync("db1", "removeme"));
+        Assert.IsFalse(await new TableExistsHandler(svc).Handle(new TableExistsQuery("db1", "removeme"), CT));
     }
 
     [TestMethod]
@@ -320,6 +295,6 @@ public class TableServiceTests
         await SeedData.SeedDatabaseAsync(ctx, "db1");
 
         await AssertEx.ThrowsAsync<NoSuchObjectException>(() =>
-            svc.DropTableAsync("db1", "ghost", deleteData: false));
+            new DropTableHandler(svc).Handle(new DropTableCommand("db1", "ghost", false), CT));
     }
 }

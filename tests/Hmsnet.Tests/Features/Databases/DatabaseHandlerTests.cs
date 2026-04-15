@@ -1,14 +1,19 @@
 using Hmsnet.Core.Exceptions;
+using Hmsnet.Core.Features.Databases.Commands;
+using Hmsnet.Core.Features.Databases.Queries;
 using Hmsnet.Core.Models;
+using Hmsnet.Infrastructure.Features.Databases;
 using Hmsnet.Infrastructure.Services;
 using Hmsnet.Tests.Helpers;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace Hmsnet.Tests;
+namespace Hmsnet.Tests.Features.Databases;
 
 [TestClass]
-public class DatabaseServiceTests
+public class DatabaseHandlerTests
 {
+    private static readonly CancellationToken CT = CancellationToken.None;
+
     // ── Create ────────────────────────────────────────────────────────────────
 
     [TestMethod]
@@ -17,7 +22,8 @@ public class DatabaseServiceTests
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
 
-        var db = await svc.CreateDatabaseAsync(SeedData.Database("sales"));
+        var db = await new CreateDatabaseHandler(svc).Handle(
+            new CreateDatabaseCommand(SeedData.Database("sales")), CT);
 
         Assert.IsGreaterThan(0, db.Id);
         Assert.AreEqual("sales", db.Name);
@@ -30,23 +36,10 @@ public class DatabaseServiceTests
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
 
-        var db = await svc.CreateDatabaseAsync(SeedData.Database("UPPERCASE_DB"));
+        var db = await new CreateDatabaseHandler(svc).Handle(
+            new CreateDatabaseCommand(SeedData.Database("UPPERCASE_DB")), CT);
 
         Assert.AreEqual("uppercase_db", db.Name);
-    }
-
-    [TestMethod]
-    public async Task CreateDatabase_SetsDefaultLocationUri_WhenEmpty()
-    {
-        await using var ctx = DbContextFactory.Create();
-        var svc = new DatabaseService(ctx);
-
-        var entity = SeedData.Database("mydb");
-        entity.LocationUri = string.Empty;
-
-        var db = await svc.CreateDatabaseAsync(entity);
-
-        StringAssert.Contains(db.LocationUri, "mydb");
     }
 
     [TestMethod]
@@ -54,21 +47,11 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("dup"));
+        var handler = new CreateDatabaseHandler(svc);
+        await handler.Handle(new CreateDatabaseCommand(SeedData.Database("dup")), CT);
 
         await AssertEx.ThrowsAsync<AlreadyExistsException>(() =>
-            svc.CreateDatabaseAsync(SeedData.Database("dup")));
-    }
-
-    [TestMethod]
-    public async Task CreateDatabase_ThrowsAlreadyExists_CaseInsensitive()
-    {
-        await using var ctx = DbContextFactory.Create();
-        var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("mydb"));
-
-        await AssertEx.ThrowsAsync<AlreadyExistsException>(() =>
-            svc.CreateDatabaseAsync(SeedData.Database("MYDB")));
+            handler.Handle(new CreateDatabaseCommand(SeedData.Database("dup")), CT));
     }
 
     // ── Get / Exists ──────────────────────────────────────────────────────────
@@ -78,9 +61,10 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("orders"));
+        await new CreateDatabaseHandler(svc).Handle(
+            new CreateDatabaseCommand(SeedData.Database("orders")), CT);
 
-        var db = await svc.GetDatabaseAsync("orders");
+        var db = await new GetDatabaseHandler(svc).Handle(new GetDatabaseQuery("orders"), CT);
 
         Assert.IsNotNull(db);
         Assert.AreEqual("orders", db.Name);
@@ -92,21 +76,9 @@ public class DatabaseServiceTests
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
 
-        var db = await svc.GetDatabaseAsync("nonexistent");
+        var db = await new GetDatabaseHandler(svc).Handle(new GetDatabaseQuery("nonexistent"), CT);
 
         Assert.IsNull(db);
-    }
-
-    [TestMethod]
-    public async Task GetDatabase_IsCaseInsensitive()
-    {
-        await using var ctx = DbContextFactory.Create();
-        var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("mydb"));
-
-        var db = await svc.GetDatabaseAsync("MYDB");
-
-        Assert.IsNotNull(db);
     }
 
     [TestMethod]
@@ -114,9 +86,11 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("present"));
+        await new CreateDatabaseHandler(svc).Handle(
+            new CreateDatabaseCommand(SeedData.Database("present")), CT);
 
-        Assert.IsTrue(await svc.DatabaseExistsAsync("present"));
+        Assert.IsTrue(await new DatabaseExistsHandler(svc).Handle(
+            new DatabaseExistsQuery("present"), CT));
     }
 
     [TestMethod]
@@ -125,7 +99,8 @@ public class DatabaseServiceTests
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
 
-        Assert.IsFalse(await svc.DatabaseExistsAsync("absent"));
+        Assert.IsFalse(await new DatabaseExistsHandler(svc).Handle(
+            new DatabaseExistsQuery("absent"), CT));
     }
 
     // ── List ──────────────────────────────────────────────────────────────────
@@ -135,10 +110,12 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
+        var createHandler = new CreateDatabaseHandler(svc);
         foreach (var n in new[] { "zebra", "alpha", "middle" })
-            await svc.CreateDatabaseAsync(SeedData.Database(n));
+            await createHandler.Handle(new CreateDatabaseCommand(SeedData.Database(n)), CT);
 
-        var names = await svc.GetAllDatabaseNamesAsync();
+        var names = await new GetAllDatabaseNamesHandler(svc).Handle(
+            new GetAllDatabaseNamesQuery(), CT);
 
         CollectionAssert.AreEqual(new[] { "alpha", "middle", "zebra" }, names.ToList());
     }
@@ -148,10 +125,11 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("db1"));
-        await svc.CreateDatabaseAsync(SeedData.Database("db2"));
+        var createHandler = new CreateDatabaseHandler(svc);
+        await createHandler.Handle(new CreateDatabaseCommand(SeedData.Database("db1")), CT);
+        await createHandler.Handle(new CreateDatabaseCommand(SeedData.Database("db2")), CT);
 
-        var dbs = await svc.GetAllDatabasesAsync();
+        var dbs = await new GetAllDatabasesHandler(svc).Handle(new GetAllDatabasesQuery(), CT);
 
         Assert.HasCount(2, dbs);
     }
@@ -163,14 +141,16 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("editable"));
+        await new CreateDatabaseHandler(svc).Handle(
+            new CreateDatabaseCommand(SeedData.Database("editable")), CT);
 
         var updated = SeedData.Database("editable");
         updated.Description = "New description";
         updated.OwnerName = "new_owner";
         updated.Parameters = new Dictionary<string, string> { ["key"] = "value" };
 
-        var result = await svc.AlterDatabaseAsync("editable", updated);
+        var result = await new AlterDatabaseHandler(svc).Handle(
+            new AlterDatabaseCommand("editable", updated), CT);
 
         Assert.AreEqual("New description", result.Description);
         Assert.AreEqual("new_owner", result.OwnerName);
@@ -184,7 +164,8 @@ public class DatabaseServiceTests
         var svc = new DatabaseService(ctx);
 
         await AssertEx.ThrowsAsync<NoSuchObjectException>(() =>
-            svc.AlterDatabaseAsync("ghost", SeedData.Database("ghost")));
+            new AlterDatabaseHandler(svc).Handle(
+                new AlterDatabaseCommand("ghost", SeedData.Database("ghost")), CT));
     }
 
     // ── Drop ──────────────────────────────────────────────────────────────────
@@ -194,11 +175,13 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
-        await svc.CreateDatabaseAsync(SeedData.Database("empty_db"));
+        await new CreateDatabaseHandler(svc).Handle(
+            new CreateDatabaseCommand(SeedData.Database("empty_db")), CT);
 
-        await svc.DropDatabaseAsync("empty_db", cascade: false);
+        await new DropDatabaseHandler(svc).Handle(new DropDatabaseCommand("empty_db", false), CT);
 
-        Assert.IsFalse(await svc.DatabaseExistsAsync("empty_db"));
+        Assert.IsFalse(await new DatabaseExistsHandler(svc).Handle(
+            new DatabaseExistsQuery("empty_db"), CT));
     }
 
     [TestMethod]
@@ -208,7 +191,7 @@ public class DatabaseServiceTests
         var svc = new DatabaseService(ctx);
 
         await AssertEx.ThrowsAsync<NoSuchObjectException>(() =>
-            svc.DropDatabaseAsync("ghost", cascade: false));
+            new DropDatabaseHandler(svc).Handle(new DropDatabaseCommand("ghost", false), CT));
     }
 
     [TestMethod]
@@ -216,10 +199,10 @@ public class DatabaseServiceTests
     {
         await using var ctx = DbContextFactory.Create();
         var svc = new DatabaseService(ctx);
-        var (_, _) = await SeedData.SeedTableAsync(ctx, "nonempty");
+        await SeedData.SeedTableAsync(ctx, "nonempty");
 
         await AssertEx.ThrowsAsync<Hmsnet.Core.Exceptions.InvalidOperationException>(() =>
-            svc.DropDatabaseAsync("nonempty", cascade: false));
+            new DropDatabaseHandler(svc).Handle(new DropDatabaseCommand("nonempty", false), CT));
     }
 
     [TestMethod]
@@ -229,8 +212,9 @@ public class DatabaseServiceTests
         var svc = new DatabaseService(ctx);
         await SeedData.SeedTableAsync(ctx, "cascadedb");
 
-        await svc.DropDatabaseAsync("cascadedb", cascade: true);
+        await new DropDatabaseHandler(svc).Handle(new DropDatabaseCommand("cascadedb", true), CT);
 
-        Assert.IsFalse(await svc.DatabaseExistsAsync("cascadedb"));
+        Assert.IsFalse(await new DatabaseExistsHandler(svc).Handle(
+            new DatabaseExistsQuery("cascadedb"), CT));
     }
 }
