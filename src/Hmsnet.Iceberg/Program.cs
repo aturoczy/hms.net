@@ -4,6 +4,9 @@ using Hmsnet.Infrastructure.Data;
 using Hmsnet.Infrastructure.Features.Iceberg.Namespaces;
 using Hmsnet.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -33,6 +36,40 @@ builder.Services.AddScoped<IIcebergCatalogService, IcebergCatalogService>();
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssembly(typeof(CreateIcebergNamespaceHandler).Assembly));
 
+// ── OpenTelemetry ─────────────────────────────────────────────────────────────
+var otlpEndpoint = builder.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
+
+var resourceBuilder = ResourceBuilder.CreateDefault()
+    .AddService(
+        serviceName: "Hmsnet.Iceberg",
+        serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0")
+    .AddAttributes([
+        new("deployment.environment", builder.Environment.EnvironmentName),
+        new("host.name", Environment.MachineName)
+    ]);
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation(opts =>
+        {
+            opts.RecordException = true;
+            opts.Filter = ctx =>
+                !ctx.Request.Path.StartsWithSegments("/openapi") &&
+                !ctx.Request.Path.StartsWithSegments("/scalar");
+        })
+        .AddHttpClientInstrumentation(opts => opts.RecordException = true)
+        .AddSource("Microsoft.EntityFrameworkCore")
+        .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint))
+        .AddConsoleExporter())
+    .WithMetrics(metrics => metrics
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddMeter("Hmsnet.Iceberg")
+        .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
+
 // ── Web API ───────────────────────────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(opts =>
@@ -54,7 +91,9 @@ using (var scope = app.Services.CreateScope())
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
-    app.MapScalarApiReference(opts => opts.WithTitle("Hmsnet Iceberg REST Catalog"));
+    app.MapScalarApiReference(opts => opts
+        .WithTitle("Hmsnet Iceberg REST Catalog")
+        .WithDefaultHttpClient(ScalarTarget.CSharp, ScalarClient.HttpClient));
 }
 
 app.UseHttpsRedirection();
