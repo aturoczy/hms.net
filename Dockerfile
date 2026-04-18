@@ -28,13 +28,7 @@ RUN dotnet publish src/Hmsnet.Api/Hmsnet.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS runtime
 WORKDIR /app
 
-# Run as non-root.
-RUN groupadd --system --gid 1000 hmsnet \
- && useradd  --system --uid 1000 --gid hmsnet --shell /usr/sbin/nologin hmsnet \
- && chown -R hmsnet:hmsnet /app
-USER hmsnet
-
-COPY --from=build --chown=hmsnet:hmsnet /app/publish .
+COPY --from=build /app/publish .
 
 # HTTP API + Thrift metastore port.
 EXPOSE 8080
@@ -43,5 +37,8 @@ EXPOSE 9083
 ENV ASPNETCORE_URLS=http://+:8080 \
     DOTNET_RUNNING_IN_CONTAINER=true \
     DOTNET_gcServer=1
+
+# The aspnet image ships a non-root `app` user (UID 1000); just use it.
+USER $APP_UID
 
 ENTRYPOINT ["dotnet", "Hmsnet.Api.dll"]
