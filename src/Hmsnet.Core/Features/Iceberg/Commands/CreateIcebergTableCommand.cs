@@ -1,3 +1,4 @@
+using Hmsnet.Core.Caching;
 using Hmsnet.Core.Models;
 using MediatR;
 
@@ -8,4 +9,12 @@ public record CreateIcebergTableCommand(
     HiveTable Table,
     string MetadataLocation,
     string MetadataJson)
-    : IRequest<IcebergTableMetadata>;
+    : IRequest<IcebergTableMetadata>, IInvalidatingCommand
+{
+    public IReadOnlyCollection<string> InvalidatesTags =>
+    [
+        CacheTags.TableList(DbName),
+        CacheTags.Table(DbName, Table.Name),
+        CacheTags.Iceberg(DbName, Table.Name),
+    ];
+}

@@ -2,6 +2,7 @@
 #
 # Services:
 #   postgres        – PostgreSQL 17 metastore database     (host port 5432)
+#   redis           – Distributed cache for read-heavy metastore queries (host port 6379)
 #   otel-collector  – Receives all OTLP, fans out to Jaeger + Prometheus  (host port 4317/4318)
 #   jaeger          – Distributed tracing UI                (host port 16686)
 #   prometheus      – Metrics storage                       (host port 9090)
@@ -36,6 +37,32 @@ services:
       test: ["CMD-SHELL", "pg_isready -U hmsnet -d metastore"]
       interval: 10s
       timeout: 5s
+      retries: 5
+
+  # ── Redis (distributed cache) ─────────────────────────────────────────────────
+  # Backs ICacheService; used for cache-aside + tag-based invalidation of
+  # catalog queries (databases, tables, partitions, column stats, Iceberg).
+  # Set Redis:Enabled=true in appsettings for the Hmsnet API to use this.
+  redis:
+    image: redis:7-alpine
+    container_name: hmsnet-redis
+    restart: unless-stopped
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "no"
+      - "--maxmemory"
+      - "256mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
       retries: 5
 
   # ── OpenTelemetry Collector ───────────────────────────────────────────────────
@@ -154,3 +181,4 @@ volumes:
   postgres-data:
   prometheus-data:
   grafana-data:
+  redis-data:
