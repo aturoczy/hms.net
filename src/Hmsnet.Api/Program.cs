@@ -3,7 +3,9 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
+using Hmsnet.Core.Caching;
 using Hmsnet.Core.Interfaces;
+using Hmsnet.Infrastructure.Caching;
 using Hmsnet.Infrastructure.Data;
 using Hmsnet.Infrastructure.Features.Databases;
 using Hmsnet.Infrastructure.Services;
@@ -33,8 +35,22 @@ builder.Services.AddScoped<ITableService, TableService>();
 builder.Services.AddScoped<IPartitionService, PartitionService>();
 builder.Services.AddScoped<IColumnStatisticsService, ColumnStatisticsService>();
 builder.Services.AddScoped<ThriftHmsHandler>();
+
+// ── Distributed cache (Redis) ─────────────────────────────────────────────────
+// Registers ICacheService as either RedisCacheService (when Redis:Enabled=true)
+// or NullCacheService. The MediatR pipeline behaviors below read/write through
+// whichever one is active, so flipping the flag requires no code change.
+builder.Services.AddHmsnetCaching(builder.Configuration);
+
 builder.Services.AddMediatR(cfg =>
-    cfg.RegisterServicesFromAssembly(typeof(CreateDatabaseHandler).Assembly));
+{
+    cfg.RegisterServicesFromAssembly(typeof(CreateDatabaseHandler).Assembly);
+    // Ordering matters: caching runs outermost (short-circuits on hit), then
+    // invalidation wraps the handler so tags are evicted only after a successful
+    // SaveChanges.
+    cfg.AddOpenBehavior(typeof(CachingBehavior<,>));
+    cfg.AddOpenBehavior(typeof(InvalidationBehavior<,>));
+});
 
 // ── Thrift server ─────────────────────────────────────────────────────────────
 builder.Services.Configure<ThriftServerOptions>(builder.Configuration.GetSection("Thrift"));
