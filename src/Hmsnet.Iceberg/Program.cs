@@ -12,20 +12,9 @@ using Scalar.AspNetCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // ── EF Core ───────────────────────────────────────────────────────────────────
-var provider = builder.Configuration["Database:Provider"] ?? "sqlite";
-var connectionString = builder.Configuration.GetConnectionString("Metastore")
-    ?? "Data Source=metastore.db";
-
-builder.Services.AddDbContext<MetastoreDbContext>(opts =>
-{
-    _ = provider.ToLowerInvariant() switch
-    {
-        "postgresql" or "postgres" => opts.UseNpgsql(connectionString,
-            npg => npg.MigrationsAssembly("Hmsnet.Infrastructure")),
-        _ => opts.UseSqlite(connectionString,
-            sq => sq.MigrationsAssembly("Hmsnet.Infrastructure"))
-    };
-});
+// Provider is picked from Database:Provider — supports postgresql, sqlserver
+// and sqlite. See Hmsnet.Infrastructure/Data/MetastoreDbContextRegistration.
+builder.Services.AddMetastoreDbContext(builder.Configuration);
 
 // ── Services ──────────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IDatabaseService, DatabaseService>();

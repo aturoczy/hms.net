@@ -66,7 +66,10 @@ The original Hive Metastore is a JVM service with a heavy dependency tree. `hms.
 ## Requirements
 
 - **.NET 10 SDK** (10.0.100 or newer)
-- **PostgreSQL 13+** (production) — or nothing, if you run with SQLite
+- One of:
+  - **PostgreSQL 13+** — recommended for production; migrations ship for this provider
+  - **SQL Server 2019+** (also Azure SQL / SQL Edge)
+  - **SQLite 3.35+** — zero-config, ideal for local dev and tests
 - **Redis 6+** (optional, for distributed caching)
 - **Docker & Docker Compose** (optional, for the local dev stack)
 
@@ -136,7 +139,7 @@ All settings live in `appsettings.json` and can be overridden by environment var
 ```jsonc
 {
   "Database": {
-    "Provider": "postgresql"           // "postgresql" | "sqlite"
+    "Provider": "postgresql"           // "postgresql" | "sqlserver" | "sqlite"
   },
   "ConnectionStrings": {
     "Metastore": "Host=localhost;Port=5432;Database=metastore;Username=hmsnet;Password=hmsnet_secret"
@@ -166,20 +169,96 @@ export Redis__ConnectionString=redis:6379
 export OpenTelemetry__Endpoint=http://otel-collector:4317
 ```
 
-### Database migrations
+### Database providers
 
-Migrations run automatically on startup (`db.Database.MigrateAsync()`). To manage them manually:
+`Database:Provider` picks which EF Core provider backs `MetastoreDbContext`. Supported values (case-insensitive):
+
+| Provider      | Value                      | Connection string example |
+|---------------|----------------------------|---------------------------|
+| PostgreSQL    | `postgresql` (or `postgres`) | `Host=localhost;Port=5432;Database=metastore;Username=hmsnet;Password=hmsnet_secret` |
+| SQL Server    | `sqlserver` (or `mssql`)     | `Server=localhost,1433;Database=metastore;User Id=sa;Password=Hmsnet_secret1;TrustServerCertificate=True` |
+| SQLite        | `sqlite`                     | `Data Source=metastore.db` |
+
+The wiring lives in [`src/Hmsnet.Infrastructure/Data/MetastoreDbContextRegistration.cs`](src/Hmsnet.Infrastructure/Data/MetastoreDbContextRegistration.cs) and is shared between `Hmsnet.Api` and `Hmsnet.Iceberg`.
+
+#### Switching providers
+
+Set two keys — either in `appsettings.json`:
+
+```jsonc
+{
+  "Database":       { "Provider": "sqlserver" },
+  "ConnectionStrings": { "Metastore": "Server=localhost,1433;Database=metastore;User Id=sa;Password=Hmsnet_secret1;TrustServerCertificate=True" }
+}
+```
+
+…or via environment variables (double underscore = section separator):
 
 ```bash
-# create a new migration
-dotnet ef migrations add <Name> \
-  -p src/Hmsnet.Infrastructure \
-  -s src/Hmsnet.Api
+# PostgreSQL
+export Database__Provider=postgresql
+export ConnectionStrings__Metastore="Host=localhost;Port=5432;Database=metastore;Username=hmsnet;Password=hmsnet_secret"
 
-# apply pending migrations against the configured connection
+# SQL Server
+export Database__Provider=sqlserver
+export ConnectionStrings__Metastore="Server=localhost,1433;Database=metastore;User Id=sa;Password=Hmsnet_secret1;TrustServerCertificate=True"
+
+# SQLite
+export Database__Provider=sqlite
+export ConnectionStrings__Metastore="Data Source=metastore.db"
+```
+
+No code change is required — restart the process and EF Core picks up the new provider.
+
+#### Running the backend in Docker
+
+The default `docker compose up -d` only starts PostgreSQL. To use SQL Server instead:
+
+```bash
+cd docker
+docker compose --profile mssql up -d mssql
+# optionally stop postgres if you don't need it:  docker compose stop postgres
+```
+
+The image is `mcr.microsoft.com/mssql/server:2022-latest`; the SA password in the compose file (`Hmsnet_secret1`) satisfies SQL Server's complexity rules. First start takes ~30s while SQL Server initialises.
+
+#### Migrations
+
+Migrations run automatically on startup (`db.Database.MigrateAsync()`). The current migrations in `src/Hmsnet.Infrastructure/Migrations/` were generated against **PostgreSQL** and are also accepted by **SQLite** (SQLite is lenient about column types).
+
+For **SQL Server**, the PostgreSQL-specific annotations (`Npgsql:ValueGenerationStrategy`, `character varying`, `boolean`, …) will not apply cleanly. Generate a SQL Server migration set of your own:
+
+```bash
+# create SQL Server migrations in a separate folder
+dotnet ef migrations add InitialCreate \
+  --project src/Hmsnet.Infrastructure \
+  --startup-project src/Hmsnet.Api \
+  --output-dir Migrations/SqlServer \
+  -- sqlserver
+
+# apply them against a running SQL Server
+DB_PROVIDER=sqlserver \
+DB_CONNECTIONSTRING="Server=localhost,1433;Database=metastore;User Id=sa;Password=Hmsnet_secret1;TrustServerCertificate=True" \
 dotnet ef database update \
-  -p src/Hmsnet.Infrastructure \
-  -s src/Hmsnet.Api
+  --project src/Hmsnet.Infrastructure \
+  --startup-project src/Hmsnet.Api \
+  -- sqlserver
+```
+
+The `--` passes `sqlserver` as the first arg to [`MetastoreDbContextFactory`](src/Hmsnet.Infrastructure/Data/MetastoreDbContextFactory.cs) so the CLI builds the context against the right provider. The factory also honours `DB_PROVIDER` / `DB_CONNECTIONSTRING` environment variables.
+
+For generic `dotnet ef` operations (any provider):
+
+```bash
+# add a migration (defaults to postgresql)
+dotnet ef migrations add <Name> \
+  --project src/Hmsnet.Infrastructure \
+  --startup-project src/Hmsnet.Api
+
+# apply migrations against the configured connection
+dotnet ef database update \
+  --project src/Hmsnet.Infrastructure \
+  --startup-project src/Hmsnet.Api
 ```
 
 ### Caching strategy

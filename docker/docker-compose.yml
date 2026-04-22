@@ -1,7 +1,8 @@
 # Full Hmsnet observability + data stack.
 #
 # Services:
-#   postgres        – PostgreSQL 17 metastore database     (host port 5432)
+#   postgres        – PostgreSQL 17 metastore database     (host port 5432, default)
+#   mssql           – SQL Server 2022 metastore database   (host port 1433, profile: mssql)
 #   redis           – Distributed cache for read-heavy metastore queries (host port 6379)
 #   otel-collector  – Receives all OTLP, fans out to Jaeger + Prometheus  (host port 4317/4318)
 #   jaeger          – Distributed tracing UI                (host port 16686)
@@ -11,7 +12,8 @@
 #
 # Usage:
 #   cd docker
-#   docker compose up -d
+#   docker compose up -d                   # default stack (PostgreSQL)
+#   docker compose --profile mssql up -d   # start SQL Server alongside / instead
 #   # Then start Hmsnet on the host (port 9083 / 5000)
 #
 # Grafana:  http://localhost:3000  (admin / admin)
@@ -38,6 +40,33 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ── SQL Server (opt-in via --profile mssql) ───────────────────────────────────
+  # Alternative RDBMS backend. Not started by default to keep the dev stack
+  # lean. Switch the Hmsnet API to it by setting:
+  #   Database__Provider=sqlserver
+  #   ConnectionStrings__Metastore="Server=localhost,1433;Database=metastore;User Id=sa;Password=Hmsnet_secret1;TrustServerCertificate=True"
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: hmsnet-mssql
+    restart: unless-stopped
+    profiles: ["mssql"]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Hmsnet_secret1"   # must satisfy SQL Server complexity rules
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' || exit 1"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # ── Redis (distributed cache) ─────────────────────────────────────────────────
   # Backs ICacheService; used for cache-aside + tag-based invalidation of
@@ -179,6 +208,7 @@ services:
 
 volumes:
   postgres-data:
+  mssql-data:
   prometheus-data:
   grafana-data:
   redis-data:
