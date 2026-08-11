@@ -5,5 +5,6 @@ public record ColumnDto(
     string TypeName,
     string? Comment,
     int OrdinalPosition,
-    bool IsPartitionKey
+    bool IsPartitionKey,
+    string? DefaultValue = null
 );

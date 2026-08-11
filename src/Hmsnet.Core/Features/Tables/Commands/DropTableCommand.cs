@@ -1,10 +1,11 @@
 using Hmsnet.Core.Caching;
+using Hmsnet.Core.Notifications;
 using MediatR;
 
 namespace Hmsnet.Core.Features.Tables.Commands;
 
 public record DropTableCommand(string DbName, string TableName, bool DeleteData)
-    : IRequest, IInvalidatingCommand
+    : IRequest, IInvalidatingCommand, IEventEmittingCommand
 {
     public IReadOnlyCollection<string> InvalidatesTags =>
     [
@@ -14,4 +15,9 @@ public record DropTableCommand(string DbName, string TableName, bool DeleteData)
         CacheTags.Stats(DbName, TableName),
         CacheTags.Iceberg(DbName, TableName),
     ];
+
+    string IEventEmittingCommand.EventType => "DROP_TABLE";
+    string? IEventEmittingCommand.DbName => DbName;
+    string? IEventEmittingCommand.TableName => TableName;
+    object? IEventEmittingCommand.EventPayload => new { DeleteData };
 }
