@@ -162,4 +162,30 @@ public class PartitionsController(ISender sender) : ControllerBase
         }
         catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
     }
+
+    /// <summary>
+    /// Batched drop-partitions-by-names. Mirrors Hive 4.2's
+    /// <c>IMetaStoreClient.drop_partitions_by_names</c> — one round-trip for
+    /// many partitions. Returns the number of partitions actually removed
+    /// (missing names are ignored).
+    /// </summary>
+    [HttpPost("batch-delete")]
+    [ProducesResponseType<int>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DropPartitionsByNames(
+        string dbName, string tableName,
+        [FromBody] DropPartitionsByNamesRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            var dropped = await sender.Send(
+                new DropPartitionsByNamesCommand(
+                    dbName, tableName, request.PartitionNames, request.DeleteData), ct);
+            return Ok(dropped);
+        }
+        catch (NoSuchObjectException ex) { return NotFound(ex.Message); }
+    }
 }
+
+public record DropPartitionsByNamesRequest(List<string> PartitionNames, bool DeleteData = false);
