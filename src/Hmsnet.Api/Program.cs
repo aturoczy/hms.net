@@ -1,4 +1,5 @@
 using Hmsnet.Api.Thrift;
+using Hmsnet.Core.Models;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -92,6 +93,23 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<MetastoreDbContext>();
     await db.Database.MigrateAsync();
+
+    // Apache Hive requires a "default" database to exist — HiveServer2 targets it on session
+    // startup, so a real Hive client won't come up against an empty metastore. The JVM metastore
+    // gets this row from `schematool -initSchema`; a fresh EF-migrated schema is empty, so seed it
+    // here to stay a drop-in replacement.
+    if (!await db.Databases.AnyAsync(d => d.Name == "default"))
+    {
+        db.Databases.Add(new HiveDatabase
+        {
+            Name = "default",
+            Description = "Default Hive database",
+            LocationUri = "hdfs:///user/hive/warehouse",
+            OwnerName = "public",
+            OwnerType = PrincipalType.Role,
+        });
+        await db.SaveChangesAsync();
+    }
 }
 
 // ── Middleware ────────────────────────────────────────────────────────────────
