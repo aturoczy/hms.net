@@ -32,6 +32,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             // Stubs required by HiveServer2 startup — return empty/no-op responses
             ["get_all_functions"] = (p, proto, header, ct) => p.HandleGetAllFunctionsAsync(proto, header, ct),
             ["set_ugi"] = (p, proto, header, ct) => p.HandleSetUgiAsync(proto, header, ct),
+            ["get_active_resource_plan"] = (p, proto, header, ct) => p.HandleGetActiveResourcePlanAsync(proto, header, ct),
         };
 
     public async Task ProcessAsync(ThriftBinaryProtocol proto, CancellationToken ct)
@@ -417,6 +418,23 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         await proto.WriteStructBeginAsync("set_ugi_result", ct);
         await proto.WriteFieldBeginAsync(new TField("success", TType.List, 0), ct);
         await WriteStringListAsync(proto, [], ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleGetActiveResourcePlanAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // HiveServer2 calls this during startup (startOrReconnectTezSessions) to look for a
+        // Workload Management resource plan. We don't implement WM, so return an empty
+        // WMGetActiveResourcePlanResponse (resourcePlan unset = "no active plan"). HS2 then starts
+        // with default Tez sessions instead of hanging on an unknown-method exception.
+        await proto.SkipAsync(TType.Struct, ct); // WMGetActiveResourcePlanRequest — ignored
+        await proto.WriteMessageBeginAsync(new TMessage("get_active_resource_plan", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_active_resource_plan_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("WMGetActiveResourcePlanResponse", ct);
+        await proto.WriteFieldStopAsync(ct);   // resourcePlan optional + unset → empty struct
+        await proto.WriteStructEndAsync(ct);
         await proto.WriteFieldEndAsync(ct);
         await FinishStructAsync(proto, ct);
     }
