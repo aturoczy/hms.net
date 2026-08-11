@@ -8,6 +8,7 @@ namespace Hmsnet.Infrastructure.Data;
 
 public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : DbContext(options)
 {
+    public DbSet<Catalog> Catalogs => Set<Catalog>();
     public DbSet<HiveDatabase> Databases => Set<HiveDatabase>();
     public DbSet<HiveTable> Tables => Set<HiveTable>();
     public DbSet<HiveColumn> Columns => Set<HiveColumn>();
@@ -16,12 +17,14 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
     public DbSet<SerDeInfo> SerDeInfos => Set<SerDeInfo>();
     public DbSet<ColumnStatistics> ColumnStatistics => Set<ColumnStatistics>();
     public DbSet<IcebergTableMetadata> IcebergMetadata => Set<IcebergTableMetadata>();
+    public DbSet<IcebergView> IcebergViews => Set<IcebergView>();
+    public DbSet<NotificationEvent> NotificationEvents => Set<NotificationEvent>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
         var jsonOptions = new JsonSerializerOptions();
 
-        // ── Converters ────────────────────────────────────────────────────────
+        // ── Converters ─────────────────────────────────────────────────────────
 
         var dictConverter = new ValueConverter<Dictionary<string, string>, string>(
             v => JsonSerializer.Serialize(v, jsonOptions),
@@ -54,19 +57,43 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
             v => JsonSerializer.Serialize(v, jsonOptions),
             v => JsonSerializer.Deserialize<SkewedInfo>(v, jsonOptions) ?? new SkewedInfo());
 
-        // ── HiveDatabase ──────────────────────────────────────────────────────
+        // ── Catalog ────────────────────────────────────────────────────────────
+        mb.Entity<Catalog>(e =>
+        {
+            e.HasKey(c => c.Id);
+            e.HasIndex(c => c.Name).IsUnique();
+            e.Property(c => c.Name).HasMaxLength(128).IsRequired();
+            e.Property(c => c.LocationUri).HasMaxLength(4096);
+            e.Property(c => c.Properties)
+                .HasConversion(dictConverter)
+                .Metadata.SetValueComparer(dictComparer);
+        });
+
+        // Seed the default "hive" catalog so existing rows referencing it via
+        // HiveDatabase.CatalogName have somewhere to point.
+        mb.Entity<Catalog>().HasData(new Catalog
+        {
+            Id = 1,
+            Name = Catalog.DefaultName,
+            Description = "Default catalog (auto-created).",
+            LocationUri = "hdfs:///user/hive/warehouse",
+            CreateTime = 0
+        });
+
+        // ── HiveDatabase ────────────────────────────────────────────────────────
         mb.Entity<HiveDatabase>(e =>
         {
             e.HasKey(d => d.Id);
             e.HasIndex(d => d.Name).IsUnique();
             e.Property(d => d.Name).HasMaxLength(128).IsRequired();
             e.Property(d => d.LocationUri).HasMaxLength(4096);
+            e.Property(d => d.CatalogName).HasMaxLength(128).IsRequired();
             e.Property(d => d.Parameters)
                 .HasConversion(dictConverter)
                 .Metadata.SetValueComparer(dictComparer);
         });
 
-        // ── HiveTable ─────────────────────────────────────────────────────────
+        // ── HiveTable ───────────────────────────────────────────────────────────
         mb.Entity<HiveTable>(e =>
         {
             e.HasKey(t => t.Id);
@@ -94,7 +121,7 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
             e.Ignore(t => t.PartitionKeys);
         });
 
-        // ── HiveColumn ────────────────────────────────────────────────────────
+        // ── HiveColumn ──────────────────────────────────────────────────────────
         mb.Entity<HiveColumn>(e =>
         {
             e.HasKey(c => c.Id);
@@ -104,7 +131,7 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
 
         mb.Entity<HiveColumn>().Navigation(c => c.Table).AutoInclude(false);
 
-        // ── StorageDescriptor ─────────────────────────────────────────────────
+        // ── StorageDescriptor ──────────────────────────────────────────────────────
         mb.Entity<StorageDescriptor>(e =>
         {
             e.HasKey(sd => sd.Id);
@@ -132,7 +159,7 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
             e.Ignore(sd => sd.Partition);
         });
 
-        // ── SerDeInfo ─────────────────────────────────────────────────────────
+        // ── SerDeInfo ───────────────────────────────────────────────────────────
         mb.Entity<SerDeInfo>(e =>
         {
             e.HasKey(s => s.Id);
@@ -142,7 +169,7 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
                 .Metadata.SetValueComparer(dictComparer);
         });
 
-        // ── HivePartition ─────────────────────────────────────────────────────
+        // ── HivePartition ────────────────────────────────────────────────────────
         mb.Entity<HivePartition>(e =>
         {
             e.HasKey(p => p.Id);
@@ -164,7 +191,7 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // ── IcebergTableMetadata ──────────────────────────────────────────────
+        // ── IcebergTableMetadata ───────────────────────────────────────────────────
         mb.Entity<IcebergTableMetadata>(e =>
         {
             e.HasKey(m => m.Id);
@@ -178,7 +205,34 @@ public class MetastoreDbContext(DbContextOptions<MetastoreDbContext> options) : 
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // ── ColumnStatistics ──────────────────────────────────────────────────
+        // ── IcebergView ─────────────────────────────────────────────────────────
+        mb.Entity<IcebergView>(e =>
+        {
+            e.HasKey(v => v.Id);
+            e.HasIndex(v => new { v.DatabaseId, v.Name }).IsUnique();
+            e.Property(v => v.Name).HasMaxLength(256).IsRequired();
+            e.Property(v => v.MetadataLocation).HasMaxLength(4096).IsRequired();
+            e.Property(v => v.MetadataJson).IsRequired();
+
+            e.HasOne(v => v.Database)
+                .WithMany()
+                .HasForeignKey(v => v.DatabaseId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── NotificationEvent ──────────────────────────────────────────────────────
+        mb.Entity<NotificationEvent>(e =>
+        {
+            e.HasKey(n => n.Id);
+            e.HasIndex(n => n.Id);
+            e.Property(n => n.EventType).HasMaxLength(64).IsRequired();
+            e.Property(n => n.CatalogName).HasMaxLength(128);
+            e.Property(n => n.DbName).HasMaxLength(128);
+            e.Property(n => n.TableName).HasMaxLength(256);
+            e.Property(n => n.MessageFormat).HasMaxLength(32).IsRequired();
+        });
+
+        // ── ColumnStatistics ───────────────────────────────────────────────────────
         mb.Entity<ColumnStatistics>(e =>
         {
             e.HasKey(cs => cs.Id);
