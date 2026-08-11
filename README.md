@@ -23,12 +23,16 @@ The original Hive Metastore is a JVM service with a heavy dependency tree. `hms.
 
 - **Thrift Hive Metastore API** (port 9083) — databases, tables, partitions, column statistics, schema lookup, batch table fetch
 - **REST API** — the same operations, JSON-friendly, documented with OpenAPI + Scalar
-- **Iceberg REST Catalog v1** — namespaces, table load / commit / rename / drop
-- **Dual-database support** — PostgreSQL for production, SQLite for local dev / tests; identical schema managed by EF Core migrations
+- **Iceberg REST Catalog v1** — namespaces, tables (load / commit / rename / drop), **views** (Iceberg VIEW spec: list / create / load / replace / rename / drop)
+- **Multi-catalog** (Hive 3+) — top-level `Catalog` entity with properties; default `hive` catalog seeded on install
+- **Column defaults** — schema fields carry an optional SQL default expression (Hive 4.2)
+- **Batched partition drop** — `drop-partitions-by-names` in one round-trip (Hive 4.2 `IMetaStoreClient`)
+- **Notification event log** — polling API (`GET /api/events?after={id}`) that emits CREATE/ALTER/DROP events, equivalent to Hive's `DbNotificationListener`; drives replication / audit / CDC
+- **Dual-database support** — PostgreSQL, SQL Server or SQLite; identical schema managed by EF Core migrations
 - **Cache-aside with tag-based invalidation** — Redis-backed, transparent to handlers, configurable TTLs
-- **CQRS** via MediatR with pipeline behaviors for caching and invalidation
+- **CQRS** via MediatR with pipeline behaviors for caching, invalidation and event emission
 - **Observability** — OpenTelemetry traces, metrics and runtime instrumentation exported over OTLP
-- **169+ unit tests** covering handlers, Thrift protocol, Iceberg and caching
+- **188+ unit tests** covering handlers, Thrift protocol, Iceberg views, notifications and caching
 
 ---
 
