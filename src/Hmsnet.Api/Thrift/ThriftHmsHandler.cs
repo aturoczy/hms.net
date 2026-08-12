@@ -59,7 +59,10 @@ public class ThriftHmsHandler(ISender sender, ILogger<ThriftHmsHandler> logger)
     {
         logger.LogDebug("Thrift: create_table {Db}.{Table}", table.DbName, table.TableName);
         var model = MapThriftTable(table);
-        model.Database = new HiveDatabase { Name = table.DbName };
+        // Reads strip the catalog prefix (@cat#db) before resolving the DB; the create path must do the
+        // same, otherwise a table whose DbName arrives catalog-qualified never resolves to the plain
+        // database row and every CREATE TABLE fails with "database does not exist".
+        model.Database = new HiveDatabase { Name = StripCatalog(table.DbName) };
         await sender.Send(new CreateTableCommand(model), ct);
     }
 
@@ -167,7 +170,7 @@ public class ThriftHmsHandler(ISender sender, ILogger<ThriftHmsHandler> logger)
         {
             Name = t.TableName,
             Owner = t.Owner,
-            TableType = Enum.TryParse<TableType>(t.TableType, true, out var tt) ? tt : TableType.ManagedTable,
+            TableType = ParseTableType(t.TableType),
             ViewOriginalText = t.ViewOriginalText,
             ViewExpandedText = t.ViewExpandedText,
             Parameters = t.Parameters ?? [],
@@ -205,6 +208,31 @@ public class ThriftHmsHandler(ISender sender, ILogger<ThriftHmsHandler> logger)
         TableType.MaterializedView => "MATERIALIZED_VIEW",
         _ => tt.ToString().ToUpperInvariant()
     };
+
+    // Hive sends the SQL-style token ("EXTERNAL_TABLE"); our enum members are PascalCase
+    // ("ExternalTable"), so Enum.TryParse — even case-insensitively — never matches because of the
+    // underscore. Map explicitly (inverse of TableTypeToString) so a real HS2's EXTERNAL_TABLE isn't
+    // silently downgraded to MANAGED_TABLE.
+    private static TableType ParseTableType(string? s) => (s ?? "").Trim().ToUpperInvariant() switch
+    {
+        "EXTERNAL_TABLE" => TableType.ExternalTable,
+        "VIRTUAL_VIEW" => TableType.VirtualView,
+        "MATERIALIZED_VIEW" => TableType.MaterializedView,
+        "MANAGED_TABLE" or "" => TableType.ManagedTable,
+        var other => Enum.TryParse<TableType>(other.Replace("_", ""), true, out var tt) ? tt : TableType.ManagedTable
+    };
+
+    // Hive 4.x encodes the catalog into the db-name string as "@catalog#db" for the legacy APIs.
+    // Mirror the processor's read-side stripping so create/read agree on the plain database name.
+    private static string StripCatalog(string name)
+    {
+        if (name.Length > 0 && name[0] == '@')
+        {
+            var hash = name.IndexOf('#');
+            if (hash >= 0) name = name[(hash + 1)..];
+        }
+        return name == "!" ? string.Empty : name;
+    }
 
     private static HiveColumn MapThriftField(ThriftFieldSchema f, int pos, bool isPartKey = false) => new()
     {

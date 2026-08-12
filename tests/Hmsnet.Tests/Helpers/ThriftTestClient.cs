@@ -42,6 +42,17 @@ public sealed class ThriftTestClient : IAsyncDisposable
         return new ThriftTestClient(tcp, proto);
     }
 
+    /// <summary>Test-only: serialize a Table struct to raw Thrift bytes so a test can assert the
+    /// on-the-wire field-id layout independently of the reader (the unconnected TcpClient is unused).</summary>
+    public static async Task<byte[]> SerializeTableAsync(ThriftTable t, CancellationToken ct = default)
+    {
+        using var ms = new MemoryStream();
+        var client = new ThriftTestClient(new TcpClient(), new ThriftBinaryProtocol(ms));
+        await client.WriteThriftTableAsync(t, ct);
+        await client._proto.FlushAsync(ct);
+        return ms.ToArray();
+    }
+
     private int NextSeqId() => System.Threading.Interlocked.Increment(ref _seqId);
 
     // ── RPC helpers ───────────────────────────────────────────────────────────
@@ -622,6 +633,7 @@ public sealed class ThriftTestClient : IAsyncDisposable
         bool compressed = false; int numBuckets = -1;
         ThriftSerDeInfo serDeInfo = new(null, string.Empty, null);
         Dictionary<string, string>? parameters = null;
+        List<ThriftFieldSchema>? cols = null;
 
         await _proto.ReadStructBeginAsync(ct);
         while (true)
@@ -630,6 +642,7 @@ public sealed class ThriftTestClient : IAsyncDisposable
             if (f.Type == TType.Stop) break;
             switch (f.Id)
             {
+                case 1 when f.Type == TType.List: cols = await ReadFieldSchemaListAsync(ct); break;
                 case 2 when f.Type == TType.String: location = await _proto.ReadStringAsync(ct); break;
                 case 3 when f.Type == TType.String: inputFormat = await _proto.ReadStringAsync(ct); break;
                 case 4 when f.Type == TType.String: outputFormat = await _proto.ReadStringAsync(ct); break;
@@ -643,7 +656,7 @@ public sealed class ThriftTestClient : IAsyncDisposable
         }
         await _proto.ReadStructEndAsync(ct);
         return new ThriftStorageDescriptor(location, inputFormat, outputFormat, compressed, numBuckets,
-            serDeInfo, null, null, parameters);
+            serDeInfo, null, null, parameters, cols);
     }
 
     private async Task<ThriftSerDeInfo> ReadThriftSerDeInfoAsync(CancellationToken ct)
