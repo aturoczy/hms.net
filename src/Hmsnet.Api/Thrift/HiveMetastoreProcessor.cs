@@ -18,6 +18,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             ["get_databases"] = (p, proto, header, ct) => p.HandleGetDatabasesAsync(proto, header, ct),
             ["get_database"] = (p, proto, header, ct) => p.HandleGetDatabaseAsync(proto, header, ct),
             ["create_database"] = (p, proto, header, ct) => p.HandleCreateDatabaseAsync(proto, header, ct),
+            ["create_database_req"] = (p, proto, header, ct) => p.HandleCreateDatabaseReqAsync(proto, header, ct),
             ["drop_database"] = (p, proto, header, ct) => p.HandleDropDatabaseAsync(proto, header, ct),
             ["get_all_tables"] = (p, proto, header, ct) => p.HandleGetAllTablesAsync(proto, header, ct),
             ["get_tables"] = (p, proto, header, ct) => p.HandleGetTablesAsync(proto, header, ct),
@@ -563,6 +564,24 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             await WriteNoSuchObjectFieldAsync(proto, 1, $"{name} database not found", ct);
         }
         await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleCreateDatabaseReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // CreateDatabaseRequest { 1: required Database database, ... }
+        ThriftDatabase? db = null;
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 1 && f.Type == TType.Struct) db = await ReadThriftDatabaseAsync(proto, ct);
+            else await proto.SkipAsync(f.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+        if (db is not null) await handler.CreateDatabaseAsync(db, ct);
+        await WriteVoidReplyAsync(proto, "create_database_req", header.SeqId, ct);
     }
 
     private async Task HandleCreateTableReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
