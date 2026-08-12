@@ -39,6 +39,33 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             ["get_all_functions"] = (p, proto, header, ct) => p.HandleGetAllFunctionsAsync(proto, header, ct),
             ["set_ugi"] = (p, proto, header, ct) => p.HandleSetUgiAsync(proto, header, ct),
             ["get_active_resource_plan"] = (p, proto, header, ct) => p.HandleGetActiveResourcePlanAsync(proto, header, ct),
+
+            // ── Hive 4.x request-wrapped variants (clients call these, not the bare methods) ──
+            ["get_database_req"] = (p, proto, header, ct) => p.HandleGetDatabaseReqAsync(proto, header, ct),
+            ["create_table_req"] = (p, proto, header, ct) => p.HandleCreateTableReqAsync(proto, header, ct),
+            ["alter_table_req"] = (p, proto, header, ct) => p.HandleAlterTableReqAsync(proto, header, ct),
+            ["drop_table_with_environment_context"] = (p, proto, header, ct) => p.HandleDropTableWithCtxAsync(proto, header, ct),
+            ["get_table_objects_by_name_req"] = (p, proto, header, ct) => p.HandleGetTableObjectsByNameReqAsync(proto, header, ct),
+
+            // ── Planner / CBO stubs — we don't track constraints or column stats, so return empty
+            //    (HS2 degrades gracefully: no keys, no stats-based costing). Keeps queries compiling.
+            ["get_all_table_constraints"] = (p, proto, header, ct) => p.HandleGetAllTableConstraintsAsync(proto, header, ct),
+            ["get_primary_keys"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_primary_keys", 1, ct),
+            ["get_foreign_keys"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_foreign_keys", 1, ct),
+            ["get_unique_constraints"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_unique_constraints", 1, ct),
+            ["get_not_null_constraints"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_not_null_constraints", 1, ct),
+            ["get_check_constraints"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_check_constraints", 1, ct),
+            ["get_default_constraints"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_default_constraints", 1, ct),
+            ["get_table_statistics_req"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_table_statistics_req", 1, ct),
+            ["get_partitions_by_expr"] = (p, proto, header, ct) => p.HandleGetPartitionsByExprAsync(proto, header, ct),
+            ["get_aggr_stats_for"] = (p, proto, header, ct) => p.HandleGetAggrStatsForAsync(proto, header, ct),
+
+            // ── Session/runtime calls ──
+            ["get_config_value"] = (p, proto, header, ct) => p.HandleGetConfigValueAsync(proto, header, ct),
+            ["getMetaConf"] = (p, proto, header, ct) => p.HandleGetMetaConfAsync(proto, header, ct),
+            ["get_current_notificationEventId"] = (p, proto, header, ct) => p.HandleGetCurrentNotificationEventIdAsync(proto, header, ct),
+            ["get_functions"] = (p, proto, header, ct) => p.HandleGetFunctionsAsync(proto, header, ct),
+            ["flushCache"] = (p, proto, header, ct) => p.HandleFlushCacheAsync(proto, header, ct),
         };
 
     public async Task ProcessAsync(ThriftBinaryProtocol proto, CancellationToken ct)
@@ -503,6 +530,290 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         await proto.WriteStructEndAsync(ct);
         await proto.WriteFieldEndAsync(ct);
         await FinishStructAsync(proto, ct);
+    }
+
+    // ── Hive 4.x request-wrapped + planner/session handlers ───────────────────
+
+    private async Task HandleGetDatabaseReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // GetDatabaseRequest { 1: string name, 2: string catalogName, ... }
+        string name = string.Empty;
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 1 && f.Type == TType.String) name = await proto.ReadStringAsync(ct);
+            else await proto.SkipAsync(f.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+
+        var db = await handler.GetDatabaseAsync(StripCatalog(name), ct);
+        await proto.WriteMessageBeginAsync(new TMessage("get_database_req", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_database_req_result", ct);
+        if (db is not null)
+        {
+            await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+            await WriteThriftDatabaseAsync(proto, db, ct);
+            await proto.WriteFieldEndAsync(ct);
+        }
+        else
+        {
+            await WriteNoSuchObjectFieldAsync(proto, 1, $"{name} database not found", ct);
+        }
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleCreateTableReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // CreateTableRequest { 1: required Table table, ... }
+        ThriftTable? table = null;
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 1 && f.Type == TType.Struct) table = await ReadThriftTableAsync(proto, ct);
+            else await proto.SkipAsync(f.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+        if (table is not null) await handler.CreateTableAsync(table, ct);
+        await WriteVoidReplyAsync(proto, "create_table_req", header.SeqId, ct);
+    }
+
+    private async Task HandleAlterTableReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // AlterTableRequest { 1: catName, 2: dbName, 3: tableName, 4: Table table, ... }
+        string dbName = string.Empty, tableName = string.Empty; ThriftTable? updated = null;
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 2 && f.Type == TType.String) dbName = await proto.ReadStringAsync(ct);
+            else if (f.Id == 3 && f.Type == TType.String) tableName = await proto.ReadStringAsync(ct);
+            else if (f.Id == 4 && f.Type == TType.Struct) updated = await ReadThriftTableAsync(proto, ct);
+            else await proto.SkipAsync(f.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+        if (updated is not null) await handler.AlterTableAsync(StripCatalog(dbName), tableName, updated, ct);
+        await WriteVoidReplyAsync(proto, "alter_table_req", header.SeqId, ct);
+    }
+
+    private async Task HandleDropTableWithCtxAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // drop_table_with_environment_context(1: dbname, 2: name, 3: deleteData, 4: EnvironmentContext)
+        string dbName = string.Empty, tableName = string.Empty; bool deleteData = false;
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 1 && f.Type == TType.String) dbName = await proto.ReadStringAsync(ct);
+            else if (f.Id == 2 && f.Type == TType.String) tableName = await proto.ReadStringAsync(ct);
+            else if (f.Id == 3 && f.Type == TType.Bool) deleteData = await proto.ReadBoolAsync(ct);
+            else await proto.SkipAsync(f.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+        await handler.DropTableAsync(StripCatalog(dbName), tableName, deleteData, ct);
+        await WriteVoidReplyAsync(proto, "drop_table_with_environment_context", header.SeqId, ct);
+    }
+
+    private async Task HandleGetTableObjectsByNameReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // GetTablesRequest { 1: dbName, 2: list<string> tblNames, ... } -> GetTablesResult { 1: list<Table> tables }
+        string dbName = string.Empty; List<string> names = [];
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 1 && f.Type == TType.String) dbName = await proto.ReadStringAsync(ct);
+            else if (f.Id == 2 && f.Type == TType.List) names = await ReadStringListAsync(proto, ct);
+            else await proto.SkipAsync(f.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+
+        var db = StripCatalog(dbName);
+        var tables = new List<ThriftTable>();
+        foreach (var n in names)
+        {
+            var t = await handler.GetTableAsync(db, n, ct);
+            if (t is not null) tables.Add(t);
+        }
+        await proto.WriteMessageBeginAsync(new TMessage("get_table_objects_by_name_req", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_table_objects_by_name_req_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("GetTablesResult", ct);
+        await proto.WriteFieldBeginAsync(new TField("tables", TType.List, 1), ct);
+        await proto.WriteListBeginAsync(new TList(TType.Struct, tables.Count), ct);
+        foreach (var t in tables) await WriteThriftTableAsync(proto, t, ct);
+        await proto.WriteListEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    /// <summary>Reply with success(0) = Response { &lt;listFieldId&gt;: [] } — an empty list of structs.
+    /// Used for the constraint/stats fetches we don't track, which HS2 tolerates as "none".</summary>
+    private async Task HandleEmptyListInStructAsync(ThriftBinaryProtocol proto, TMessage header, string method, short listFieldId, CancellationToken ct)
+    {
+        await proto.SkipAsync(TType.Struct, ct);
+        await proto.WriteMessageBeginAsync(new TMessage(method, TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync($"{method}_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("Response", ct);
+        await WriteEmptyListFieldAsync(proto, listFieldId, ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleGetAllTableConstraintsAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // AllTableConstraintsResponse { 1: SQLAllTableConstraints { 1..6: constraint lists } } — all empty.
+        await proto.SkipAsync(TType.Struct, ct);
+        await proto.WriteMessageBeginAsync(new TMessage("get_all_table_constraints", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_all_table_constraints_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("AllTableConstraintsResponse", ct);
+        await proto.WriteFieldBeginAsync(new TField("allTableConstraints", TType.Struct, 1), ct);
+        await proto.WriteStructBeginAsync("SQLAllTableConstraints", ct);
+        for (short i = 1; i <= 6; i++) await WriteEmptyListFieldAsync(proto, i, ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleGetPartitionsByExprAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // PartitionsByExprResult { 1: list<Partition> partitions, 2: bool hasUnknownPartitions }
+        await proto.SkipAsync(TType.Struct, ct);
+        await proto.WriteMessageBeginAsync(new TMessage("get_partitions_by_expr", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_partitions_by_expr_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("PartitionsByExprResult", ct);
+        await WriteEmptyListFieldAsync(proto, 1, ct);
+        await WriteBoolField(proto, 2, false, ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleGetAggrStatsForAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // AggrStats { 1: list<ColumnStatisticsObj> colStats, 2: i64 partsFound }
+        await proto.SkipAsync(TType.Struct, ct);
+        await proto.WriteMessageBeginAsync(new TMessage("get_aggr_stats_for", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_aggr_stats_for_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("AggrStats", ct);
+        await WriteEmptyListFieldAsync(proto, 1, ct);
+        await WriteI64Field(proto, 2, 0, ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleGetConfigValueAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // get_config_value(1: name, 2: defaultValue) -> string. We hold no server config → echo the default.
+        string def = string.Empty;
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 2 && f.Type == TType.String) def = await proto.ReadStringAsync(ct);
+            else await proto.SkipAsync(f.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+        await WriteStringSuccessReplyAsync(proto, "get_config_value", header.SeqId, def, ct);
+    }
+
+    private async Task HandleGetMetaConfAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        await proto.SkipAsync(TType.Struct, ct);
+        await WriteStringSuccessReplyAsync(proto, "getMetaConf", header.SeqId, string.Empty, ct);
+    }
+
+    private async Task HandleGetCurrentNotificationEventIdAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // CurrentNotificationEventId { 1: i64 eventId } — we don't keep a notification log → 0.
+        await proto.SkipAsync(TType.Struct, ct);
+        await proto.WriteMessageBeginAsync(new TMessage("get_current_notificationEventId", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_current_notificationEventId_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("CurrentNotificationEventId", ct);
+        await WriteI64Field(proto, 1, 0, ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleGetFunctionsAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        await proto.SkipAsync(TType.Struct, ct);
+        await WriteStringListReplyAsync(proto, "get_functions", header.SeqId, [], ct);
+    }
+
+    private async Task HandleFlushCacheAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        await proto.SkipAsync(TType.Struct, ct);
+        await WriteVoidReplyAsync(proto, "flushCache", header.SeqId, ct);
+    }
+
+    // ── shared writers for the handlers above ─────────────────────────────────
+
+    private static async Task WriteEmptyListFieldAsync(ThriftBinaryProtocol proto, short id, CancellationToken ct)
+    {
+        await proto.WriteFieldBeginAsync(new TField(string.Empty, TType.List, id), ct);
+        await proto.WriteListBeginAsync(new TList(TType.Struct, 0), ct);
+        await proto.WriteListEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+    }
+
+    private static async Task WriteI64Field(ThriftBinaryProtocol proto, short id, long value, CancellationToken ct)
+    {
+        await proto.WriteFieldBeginAsync(new TField(string.Empty, TType.I64, id), ct);
+        await proto.WriteI64Async(value, ct);
+        await proto.WriteFieldEndAsync(ct);
+    }
+
+    private static async Task WriteStringSuccessReplyAsync(ThriftBinaryProtocol proto, string method, int seqId, string value, CancellationToken ct)
+    {
+        await proto.WriteMessageBeginAsync(new TMessage(method, TMessageType.Reply, seqId), ct);
+        await proto.WriteStructBeginAsync($"{method}_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.String, 0), ct);
+        await proto.WriteStringAsync(value, ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    private static async Task WriteNoSuchObjectFieldAsync(ThriftBinaryProtocol proto, short fieldId, string message, CancellationToken ct)
+    {
+        await proto.WriteFieldBeginAsync(new TField("o2", TType.Struct, fieldId), ct);
+        await proto.WriteStructBeginAsync("NoSuchObjectException", ct);
+        await WriteStringField(proto, 1, message, ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
     }
 
     // ── Hive 4.x catalog-qualified name handling ──────────────────────────────
