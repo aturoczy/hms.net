@@ -13,6 +13,9 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["get_all_databases"] = (p, proto, header, ct) => p.HandleGetAllDatabasesAsync(proto, header, ct),
+            // Hive 4.x clients call get_databases(pattern) (catalog-prefixed) even for "show all",
+            // so getAllDatabases()/SHOW DATABASES route here, not to get_all_databases.
+            ["get_databases"] = (p, proto, header, ct) => p.HandleGetDatabasesAsync(proto, header, ct),
             ["get_database"] = (p, proto, header, ct) => p.HandleGetDatabaseAsync(proto, header, ct),
             ["create_database"] = (p, proto, header, ct) => p.HandleCreateDatabaseAsync(proto, header, ct),
             ["drop_database"] = (p, proto, header, ct) => p.HandleDropDatabaseAsync(proto, header, ct),
@@ -76,6 +79,19 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         await FinishStructAsync(proto, ct);
     }
 
+    private async Task HandleGetDatabasesAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        string pattern = string.Empty;
+        await ReadStructAsync(proto, async (p, id) =>
+        {
+            if (id == 1) pattern = await p.ReadStringAsync(ct);
+            else await p.SkipAsync(TType.String, ct);
+        }, ct);
+        var all = await handler.GetAllDatabasesAsync(ct);
+        var filtered = FilterByHivePattern(all, StripCatalog(pattern));
+        await WriteStringListReplyAsync(proto, "get_databases", header.SeqId, filtered, ct);
+    }
+
     private async Task HandleGetDatabaseAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string name = string.Empty;
@@ -85,7 +101,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             else await p.SkipAsync(TType.String, ct);
         }, ct);
 
-        var db = await handler.GetDatabaseAsync(name, ct);
+        var db = await handler.GetDatabaseAsync(StripCatalog(name), ct);
         await proto.WriteMessageBeginAsync(new TMessage("get_database", TMessageType.Reply, header.SeqId), ct);
         await proto.WriteStructBeginAsync("get_database_result", ct);
         if (db is not null)
@@ -136,7 +152,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             if (id == 1) dbName = await p.ReadStringAsync(ct);
             else await p.SkipAsync(TType.String, ct);
         }, ct);
-        var tables = await handler.GetAllTablesAsync(dbName, ct);
+        var tables = await handler.GetAllTablesAsync(StripCatalog(dbName), ct);
         await WriteStringListReplyAsync(proto, "get_all_tables", header.SeqId, tables, ct);
     }
 
@@ -152,7 +168,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 default: await p.SkipAsync(TType.String, ct); break;
             }
         }, ct);
-        var tables = await handler.GetTablesAsync(dbName, pattern, ct);
+        var tables = await handler.GetTablesAsync(StripCatalog(dbName), pattern, ct);
         await WriteStringListReplyAsync(proto, "get_tables", header.SeqId, tables, ct);
     }
 
@@ -168,7 +184,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 default: await p.SkipAsync(TType.String, ct); break;
             }
         }, ct);
-        var table = await handler.GetTableAsync(dbName, tableName, ct);
+        var table = await handler.GetTableAsync(StripCatalog(dbName), tableName, ct);
         await proto.WriteMessageBeginAsync(new TMessage("get_table", TMessageType.Reply, header.SeqId), ct);
         await proto.WriteStructBeginAsync("get_table_result", ct);
         if (table is not null)
@@ -437,6 +453,34 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         await proto.WriteStructEndAsync(ct);
         await proto.WriteFieldEndAsync(ct);
         await FinishStructAsync(proto, ct);
+    }
+
+    // ── Hive 4.x catalog-qualified name handling ──────────────────────────────
+
+    /// <summary>Hive 4.x clients prefix db names/patterns with the catalog:
+    /// <c>@&lt;catalog&gt;#&lt;dbNameOrPattern&gt;</c>, and use <c>!</c> as the "no database" marker.
+    /// We're single-catalog, so strip the prefix and map the empty marker to an empty pattern.</summary>
+    private static string StripCatalog(string name)
+    {
+        if (name.Length > 0 && name[0] == '@')
+        {
+            var hash = name.IndexOf('#');
+            if (hash >= 0) name = name[(hash + 1)..];
+        }
+        return name == "!" ? string.Empty : name;
+    }
+
+    /// <summary>Filter names by a Hive SHOW-pattern: <c>*</c> wildcard, <c>|</c> alternation,
+    /// empty/<c>*</c> means "all". Case-insensitive, matching HMS semantics.</summary>
+    private static IReadOnlyList<string> FilterByHivePattern(IReadOnlyList<string> names, string pattern)
+    {
+        if (string.IsNullOrEmpty(pattern) || pattern is "*" or ".*" or "%") return names;
+        var regexes = pattern.Split('|', StringSplitOptions.RemoveEmptyEntries)
+            .Select(a => "^" + System.Text.RegularExpressions.Regex.Escape(a).Replace("\\*", ".*") + "$")
+            .ToList();
+        return names.Where(n => regexes.Any(r =>
+            System.Text.RegularExpressions.Regex.IsMatch(n, r, System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
+            .ToList();
     }
 
     // ── Struct r/w helpers ────────────────────────────────────────────────────
