@@ -113,10 +113,10 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetDatabasesAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string pattern = string.Empty;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             if (id == 1) pattern = await p.ReadStringAsync(ct);
-            else await p.SkipAsync(TType.String, ct);
+            else await p.SkipAsync(ftype, ct);
         }, ct);
         var all = await handler.GetAllDatabasesAsync(ct);
         var filtered = FilterByHivePattern(all, StripCatalog(pattern));
@@ -126,10 +126,10 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetDatabaseAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string name = string.Empty;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             if (id == 1) name = await p.ReadStringAsync(ct);
-            else await p.SkipAsync(TType.String, ct);
+            else await p.SkipAsync(ftype, ct);
         }, ct);
 
         var db = await handler.GetDatabaseAsync(StripCatalog(name), ct);
@@ -147,10 +147,10 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleCreateDatabaseAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         ThriftDatabase? db = null;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             if (id == 1) db = await ReadThriftDatabaseAsync(p, ct);
-            else await p.SkipAsync(TType.Struct, ct);
+            else await p.SkipAsync(ftype, ct);
         }, ct);
         if (db is not null) await handler.CreateDatabaseAsync(db, ct);
         await WriteVoidReplyAsync(proto, "create_database", header.SeqId, ct);
@@ -159,14 +159,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleDropDatabaseAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string name = string.Empty; bool deleteData = false, cascade = false;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: name = await p.ReadStringAsync(ct); break;
                 case 2: deleteData = await p.ReadBoolAsync(ct); break;
                 case 3: cascade = await p.ReadBoolAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         await handler.DropDatabaseAsync(name, deleteData, cascade, ct);
@@ -178,10 +178,10 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetAllTablesAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             if (id == 1) dbName = await p.ReadStringAsync(ct);
-            else await p.SkipAsync(TType.String, ct);
+            else await p.SkipAsync(ftype, ct);
         }, ct);
         var tables = await handler.GetAllTablesAsync(StripCatalog(dbName), ct);
         await WriteStringListReplyAsync(proto, "get_all_tables", header.SeqId, tables, ct);
@@ -190,13 +190,13 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetTablesAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, pattern = string.Empty;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: pattern = await p.ReadStringAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var tables = await handler.GetTablesAsync(StripCatalog(dbName), pattern, ct);
@@ -206,13 +206,13 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetTableAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, tableName = string.Empty;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var table = await handler.GetTableAsync(StripCatalog(dbName), tableName, ct);
@@ -277,10 +277,10 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleCreateTableAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         ThriftTable? table = null;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             if (id == 1) table = await ReadThriftTableAsync(p, ct);
-            else await p.SkipAsync(TType.Struct, ct);
+            else await p.SkipAsync(ftype, ct);
         }, ct);
         if (table is not null) await handler.CreateTableAsync(table, ct);
         await WriteVoidReplyAsync(proto, "create_table", header.SeqId, ct);
@@ -289,14 +289,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleDropTableAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, tableName = string.Empty; bool deleteData = false;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
                 case 3: deleteData = await p.ReadBoolAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         await handler.DropTableAsync(dbName, tableName, deleteData, ct);
@@ -306,14 +306,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleAlterTableAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, tableName = string.Empty; ThriftTable? updated = null;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
                 case 3: updated = await ReadThriftTableAsync(p, ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         if (updated is not null) await handler.AlterTableAsync(dbName, tableName, updated, ct);
@@ -325,13 +325,13 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetFieldsAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, tableName = string.Empty;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var fields = await handler.GetFieldsAsync(dbName, tableName, ct);
@@ -341,13 +341,13 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetSchemaAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, tableName = string.Empty;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var schema = await handler.GetSchemaAsync(dbName, tableName, ct);
@@ -359,10 +359,10 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleAddPartitionAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         ThriftPartition? partition = null;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             if (id == 1) partition = await ReadThriftPartitionAsync(p, ct);
-            else await p.SkipAsync(TType.Struct, ct);
+            else await p.SkipAsync(ftype, ct);
         }, ct);
         ThriftPartition? result = partition is not null
             ? await handler.AddPartitionAsync(partition, ct) : null;
@@ -381,14 +381,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     {
         string dbName = string.Empty, tableName = string.Empty;
         var values = new List<string>();
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
                 case 3: values = await ReadStringListAsync(p, ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var partition = await handler.GetPartitionAsync(dbName, tableName, values, ct);
@@ -406,14 +406,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetPartitionsAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, tableName = string.Empty; int maxParts = -1;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
                 case 3: maxParts = await p.ReadI32Async(ct); break;
-                default: await p.SkipAsync(TType.I32, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var partitions = await handler.GetPartitionsAsync(dbName, tableName, maxParts, ct);
@@ -430,14 +430,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     private async Task HandleGetPartitionNamesAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
         string dbName = string.Empty, tableName = string.Empty; int maxParts = -1;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: dbName = await p.ReadStringAsync(ct); break;
                 case 2: tableName = await p.ReadStringAsync(ct); break;
                 case 3: maxParts = await p.ReadI32Async(ct); break;
-                default: await p.SkipAsync(TType.I32, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var names = await handler.GetPartitionNamesAsync(dbName, tableName, maxParts, ct);
@@ -448,7 +448,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     {
         string dbName = string.Empty, tableName = string.Empty;
         var values = new List<string>(); bool deleteData = false;
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
@@ -456,7 +456,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 case 2: tableName = await p.ReadStringAsync(ct); break;
                 case 3: values = await ReadStringListAsync(p, ct); break;
                 case 4: deleteData = await p.ReadBoolAsync(ct); break;
-                default: await p.SkipAsync(TType.Bool, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         var result = await handler.DropPartitionAsync(dbName, tableName, values, deleteData, ct);
@@ -499,13 +499,13 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     /// </summary>
     private async Task HandleSetUgiAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             // field 1 = user (string), field 2 = groups (list<string>) — discard both
             if (id == 2)
                 await ReadStringListAsync(p, ct);
             else
-                await p.SkipAsync(TType.String, ct);
+                await p.SkipAsync(ftype, ct);
         }, ct);
         // Return empty list<string>
         await proto.WriteMessageBeginAsync(new TMessage("set_ugi", TMessageType.Reply, header.SeqId), ct);
@@ -865,15 +865,18 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
 
     // ── Struct r/w helpers ────────────────────────────────────────────────────
 
+    // The field handler receives the wire TYPE too, so unknown/skipped fields are skipped by their
+    // ACTUAL type. Skipping by a fixed type (e.g. String) corrupts the stream the moment a struct
+    // carries a bool/i32/i64/struct/list field we don't read — which every Hive 4.x Table does.
     private static async Task ReadStructAsync(ThriftBinaryProtocol proto,
-        Func<ThriftBinaryProtocol, short, Task> fieldHandler, CancellationToken ct)
+        Func<ThriftBinaryProtocol, short, TType, Task> fieldHandler, CancellationToken ct)
     {
         await proto.ReadStructBeginAsync(ct);
         while (true)
         {
             var field = await proto.ReadFieldBeginAsync(ct);
             if (field.Type == TType.Stop) break;
-            await fieldHandler(proto, field.Id);
+            await fieldHandler(proto, field.Id, field.Type);
             await proto.ReadFieldEndAsync(ct);
         }
         await proto.ReadStructEndAsync(ct);
@@ -885,7 +888,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     {
         string name = "", locationUri = ""; string? description = null, ownerName = null;
         Dictionary<string, string> parameters = new();
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
@@ -894,7 +897,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 case 3: locationUri = await p.ReadStringAsync(ct); break;
                 case 4: parameters = await ReadStringMapAsync(p, ct); break;
                 case 5: ownerName = await p.ReadStringAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         return new ThriftDatabase(name, description, locationUri, ownerName, parameters);
@@ -921,7 +924,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         var partKeys = new List<ThriftFieldSchema>();
         Dictionary<string, string> parameters = new();
 
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
@@ -937,7 +940,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 case 12: viewOrig = await p.ReadStringAsync(ct); break;
                 case 13: viewExp = await p.ReadStringAsync(ct); break;
                 case 15: tableType = await p.ReadStringAsync(ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
 
@@ -989,7 +992,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         Dictionary<string, string> parameters = new();
         List<ThriftFieldSchema> cols = new();
 
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
@@ -1001,7 +1004,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 case 8: numBuckets = await p.ReadI32Async(ct); break;
                 case 9: serDeInfo = await ReadThriftSerDeInfoAsync(p, ct); break;
                 case 12: parameters = await ReadStringMapAsync(p, ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
 
@@ -1044,14 +1047,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
     {
         string? name = null; string lib = string.Empty;
         Dictionary<string, string> parameters = new();
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
                 case 1: name = await p.ReadStringAsync(ct); break;
                 case 2: lib = await p.ReadStringAsync(ct); break;
                 case 3: parameters = await ReadStringMapAsync(p, ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
         return new ThriftSerDeInfo(name, lib, parameters);
@@ -1074,7 +1077,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         ThriftStorageDescriptor? sd = null;
         Dictionary<string, string> parameters = new();
 
-        await ReadStructAsync(proto, async (p, id) =>
+        await ReadStructAsync(proto, async (p, id, ftype) =>
         {
             switch (id)
             {
@@ -1085,7 +1088,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 case 5: lastAccess = await p.ReadI32Async(ct); break;
                 case 6: sd = await ReadThriftSdAsync(p, ct); break;
                 case 7: parameters = await ReadStringMapAsync(p, ct); break;
-                default: await p.SkipAsync(TType.String, ct); break;
+                default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
 
@@ -1121,14 +1124,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         for (int i = 0; i < list.Count; i++)
         {
             string fname = "", ftype = ""; string? comment = null;
-            await ReadStructAsync(proto, async (p, id) =>
+            await ReadStructAsync(proto, async (p, id, wt) =>
             {
                 switch (id)
                 {
                     case 1: fname = await p.ReadStringAsync(ct); break;
                     case 2: ftype = await p.ReadStringAsync(ct); break;
                     case 3: comment = await p.ReadStringAsync(ct); break;
-                    default: await p.SkipAsync(TType.String, ct); break;
+                    default: await p.SkipAsync(wt, ct); break;
                 }
             }, ct);
             result.Add(new ThriftFieldSchema(fname, ftype, comment));
