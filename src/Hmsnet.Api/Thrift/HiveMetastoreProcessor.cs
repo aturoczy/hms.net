@@ -60,6 +60,12 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             ["get_table_statistics_req"] = (p, proto, header, ct) => p.HandleEmptyListInStructAsync(proto, header, "get_table_statistics_req", 1, ct),
             ["get_partitions_by_expr"] = (p, proto, header, ct) => p.HandleGetPartitionsByExprAsync(proto, header, ct),
             ["get_aggr_stats_for"] = (p, proto, header, ct) => p.HandleGetAggrStatsForAsync(proto, header, ct),
+            // Column/aggregate statistics writes HS2 fires from its StatsTask right after an INSERT.
+            // We don't persist column stats, but the calls must succeed (return true) or the INSERT's
+            // StatsTask fails the whole statement. Accept and acknowledge them.
+            ["set_aggr_stats_for"] = (p, proto, header, ct) => p.HandleBoolReplyAsync(proto, header, "set_aggr_stats_for", true, ct),
+            ["update_table_column_statistics"] = (p, proto, header, ct) => p.HandleBoolReplyAsync(proto, header, "update_table_column_statistics", true, ct),
+            ["update_partition_column_statistics"] = (p, proto, header, ct) => p.HandleBoolReplyAsync(proto, header, "update_partition_column_statistics", true, ct),
 
             // ── Session/runtime calls ──
             ["get_config_value"] = (p, proto, header, ct) => p.HandleGetConfigValueAsync(proto, header, ct),
@@ -229,20 +235,15 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
 
     private async Task HandleGetTableReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
-        // GetTableRequest has mixed field types (1:dbName, 2:tblName, 3:capabilities struct,
-        // 4:catName, …), so we must skip unknown fields by their ACTUAL wire type, not a fixed one.
+        // args wrapper → GetTableRequest with mixed field types (1:dbName, 2:tblName,
+        // 3:capabilities struct, 4:catName, …); skip unknown fields by their ACTUAL wire type.
         string dbName = string.Empty, tblName = string.Empty;
-        await proto.ReadStructBeginAsync(ct);
-        while (true)
+        await ReadRequestArgAsync(proto, async (p, id, ftype) =>
         {
-            var field = await proto.ReadFieldBeginAsync(ct);
-            if (field.Type == TType.Stop) break;
-            if (field.Id == 1 && field.Type == TType.String) dbName = await proto.ReadStringAsync(ct);
-            else if (field.Id == 2 && field.Type == TType.String) tblName = await proto.ReadStringAsync(ct);
-            else await proto.SkipAsync(field.Type, ct);
-            await proto.ReadFieldEndAsync(ct);
-        }
-        await proto.ReadStructEndAsync(ct);
+            if (id == 1 && ftype == TType.String) dbName = await p.ReadStringAsync(ct);
+            else if (id == 2 && ftype == TType.String) tblName = await p.ReadStringAsync(ct);
+            else await p.SkipAsync(ftype, ct);
+        }, ct);
 
         var table = await handler.GetTableAsync(StripCatalog(dbName), tblName, ct);
 
@@ -537,18 +538,13 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
 
     private async Task HandleGetDatabaseReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
-        // GetDatabaseRequest { 1: string name, 2: string catalogName, ... }
+        // args wrapper → GetDatabaseRequest { 1: string name, 2: string catalogName, ... }
         string name = string.Empty;
-        await proto.ReadStructBeginAsync(ct);
-        while (true)
+        await ReadRequestArgAsync(proto, async (p, id, ftype) =>
         {
-            var f = await proto.ReadFieldBeginAsync(ct);
-            if (f.Type == TType.Stop) break;
-            if (f.Id == 1 && f.Type == TType.String) name = await proto.ReadStringAsync(ct);
-            else await proto.SkipAsync(f.Type, ct);
-            await proto.ReadFieldEndAsync(ct);
-        }
-        await proto.ReadStructEndAsync(ct);
+            if (id == 1 && ftype == TType.String) name = await p.ReadStringAsync(ct);
+            else await p.SkipAsync(ftype, ct);
+        }, ct);
 
         var db = await handler.GetDatabaseAsync(StripCatalog(name), ct);
         await proto.WriteMessageBeginAsync(new TMessage("get_database_req", TMessageType.Reply, header.SeqId), ct);
@@ -568,58 +564,54 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
 
     private async Task HandleCreateDatabaseReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
-        // CreateDatabaseRequest { 1: required Database database, ... }
+        // args wrapper → CreateDatabaseRequest { 1: required Database database, ... }
         ThriftDatabase? db = null;
-        await proto.ReadStructBeginAsync(ct);
-        while (true)
+        await ReadRequestArgAsync(proto, async (p, id, ftype) =>
         {
-            var f = await proto.ReadFieldBeginAsync(ct);
-            if (f.Type == TType.Stop) break;
-            if (f.Id == 1 && f.Type == TType.Struct) db = await ReadThriftDatabaseAsync(proto, ct);
-            else await proto.SkipAsync(f.Type, ct);
-            await proto.ReadFieldEndAsync(ct);
-        }
-        await proto.ReadStructEndAsync(ct);
+            if (id == 1 && ftype == TType.Struct) db = await ReadThriftDatabaseAsync(p, ct);
+            else await p.SkipAsync(ftype, ct);
+        }, ct);
         if (db is not null) await handler.CreateDatabaseAsync(db, ct);
         await WriteVoidReplyAsync(proto, "create_database_req", header.SeqId, ct);
     }
 
     private async Task HandleCreateTableReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
-        // CreateTableRequest { 1: required Table table, ... }
+        // args wrapper → CreateTableRequest { 1: required Table table, ... }
         ThriftTable? table = null;
-        await proto.ReadStructBeginAsync(ct);
-        while (true)
+        await ReadRequestArgAsync(proto, async (p, id, ftype) =>
         {
-            var f = await proto.ReadFieldBeginAsync(ct);
-            if (f.Type == TType.Stop) break;
-            if (f.Id == 1 && f.Type == TType.Struct) table = await ReadThriftTableAsync(proto, ct);
-            else await proto.SkipAsync(f.Type, ct);
-            await proto.ReadFieldEndAsync(ct);
-        }
-        await proto.ReadStructEndAsync(ct);
+            if (id == 1 && ftype == TType.Struct) table = await ReadThriftTableAsync(p, ct);
+            else await p.SkipAsync(ftype, ct);
+        }, ct);
         if (table is not null) await handler.CreateTableAsync(table, ct);
         await WriteVoidReplyAsync(proto, "create_table_req", header.SeqId, ct);
     }
 
     private async Task HandleAlterTableReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
-        // AlterTableRequest { 1: catName, 2: dbName, 3: tableName, 4: Table table, ... }
+        // args wrapper → AlterTableRequest { 1: catName, 2: dbName, 3: tableName, 4: Table table, ... }
         string dbName = string.Empty, tableName = string.Empty; ThriftTable? updated = null;
-        await proto.ReadStructBeginAsync(ct);
-        while (true)
+        await ReadRequestArgAsync(proto, async (p, id, ftype) =>
         {
-            var f = await proto.ReadFieldBeginAsync(ct);
-            if (f.Type == TType.Stop) break;
-            if (f.Id == 2 && f.Type == TType.String) dbName = await proto.ReadStringAsync(ct);
-            else if (f.Id == 3 && f.Type == TType.String) tableName = await proto.ReadStringAsync(ct);
-            else if (f.Id == 4 && f.Type == TType.Struct) updated = await ReadThriftTableAsync(proto, ct);
-            else await proto.SkipAsync(f.Type, ct);
-            await proto.ReadFieldEndAsync(ct);
-        }
-        await proto.ReadStructEndAsync(ct);
+            if (id == 2 && ftype == TType.String) dbName = await p.ReadStringAsync(ct);
+            else if (id == 3 && ftype == TType.String) tableName = await p.ReadStringAsync(ct);
+            else if (id == 4 && ftype == TType.Struct) updated = await ReadThriftTableAsync(p, ct);
+            else await p.SkipAsync(ftype, ct);
+        }, ct);
         if (updated is not null) await handler.AlterTableAsync(StripCatalog(dbName), tableName, updated, ct);
-        await WriteVoidReplyAsync(proto, "alter_table_req", header.SeqId, ct);
+        // alter_table_req is NOT void — it returns AlterTableResponse. HS2 calls it after an INSERT to
+        // write back the refreshed table (row/size stats); a void reply makes HS2 fail the MoveTask
+        // with "alter_table_req failed: unknown result". AlterTableResponse has no required fields, so
+        // an empty struct at success(0) is a valid OK response.
+        await proto.WriteMessageBeginAsync(new TMessage("alter_table_req", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("alter_table_req_result", ct);
+        await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+        await proto.WriteStructBeginAsync("AlterTableResponse", ct);
+        await proto.WriteFieldStopAsync(ct);
+        await proto.WriteStructEndAsync(ct);
+        await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
     }
 
     private async Task HandleDropTableWithCtxAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
@@ -644,21 +636,23 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
 
     private async Task HandleGetTableObjectsByNameReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
     {
-        // GetTablesRequest { 1: dbName, 2: list<string> tblNames, ... } -> GetTablesResult { 1: list<Table> tables }
+        // args wrapper → GetTablesRequest { 1: dbName, 2: list<string> tblNames, ... }
+        //   -> GetTablesResult { 1: list<Table> tables }
+        // HS2 4.x uses this for SHOW TABLES: it sends the db name and (for a plain SHOW TABLES with no
+        // explicit list) an empty tblNames, expecting every table in the db back. Reading the fields
+        // at the wrapper level (the old bug) left dbName empty and returned nothing — the "No tables"
+        // symptom even though the tables exist.
         string dbName = string.Empty; List<string> names = [];
-        await proto.ReadStructBeginAsync(ct);
-        while (true)
+        await ReadRequestArgAsync(proto, async (p, id, ftype) =>
         {
-            var f = await proto.ReadFieldBeginAsync(ct);
-            if (f.Type == TType.Stop) break;
-            if (f.Id == 1 && f.Type == TType.String) dbName = await proto.ReadStringAsync(ct);
-            else if (f.Id == 2 && f.Type == TType.List) names = await ReadStringListAsync(proto, ct);
-            else await proto.SkipAsync(f.Type, ct);
-            await proto.ReadFieldEndAsync(ct);
-        }
-        await proto.ReadStructEndAsync(ct);
+            if (id == 1 && ftype == TType.String) dbName = await p.ReadStringAsync(ct);
+            else if (id == 2 && ftype == TType.List) names = await ReadStringListAsync(p, ct);
+            else await p.SkipAsync(ftype, ct);
+        }, ct);
 
         var db = StripCatalog(dbName);
+        // No explicit names → "all tables in the db" (SHOW TABLES). Otherwise fetch the requested ones.
+        if (names.Count == 0) names = [.. await handler.GetAllTablesAsync(db, ct)];
         var tables = new List<ThriftTable>();
         foreach (var n in names)
         {
@@ -693,6 +687,17 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         await proto.WriteFieldStopAsync(ct);
         await proto.WriteStructEndAsync(ct);
         await proto.WriteFieldEndAsync(ct);
+        await FinishStructAsync(proto, ct);
+    }
+
+    /// <summary>Skip the request and reply success(0) = bool. For fire-and-forget calls (e.g. stats
+    /// writes) whose result HS2 only checks for a truthy ack.</summary>
+    private async Task HandleBoolReplyAsync(ThriftBinaryProtocol proto, TMessage header, string method, bool value, CancellationToken ct)
+    {
+        await proto.SkipAsync(TType.Struct, ct);
+        await proto.WriteMessageBeginAsync(new TMessage(method, TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync($"{method}_result", ct);
+        await WriteBoolField(proto, 0, value, ct);
         await FinishStructAsync(proto, ct);
     }
 
@@ -882,6 +887,34 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         await proto.ReadStructEndAsync(ct);
     }
 
+    // The Hive 4.x metastore *_req calls take a single request struct as their one argument, e.g.
+    // `Database get_database_req(1: GetDatabaseRequest req)`. On the wire Thrift wraps EVERY method
+    // argument in an args struct, so the bytes are `get_database_req_args { 1: GetDatabaseRequest }`
+    // — the real fields (name, dbName, the Table, …) live one level below the args wrapper. This
+    // helper reads the wrapper, then hands the inner request struct's fields to `fieldHandler`.
+    // Reading the request's fields directly at the wrapper level (the earlier bug) skips the whole
+    // request struct, so every field comes back empty — which surfaced as HS2 reporting a freshly
+    // created database as "does not exist".
+    private static async Task ReadRequestArgAsync(ThriftBinaryProtocol proto,
+        Func<ThriftBinaryProtocol, short, TType, Task> fieldHandler, CancellationToken ct)
+    {
+        await proto.ReadStructBeginAsync(ct);           // args wrapper
+        var readInner = false;
+        while (true)
+        {
+            var wf = await proto.ReadFieldBeginAsync(ct);
+            if (wf.Type == TType.Stop) break;
+            if (wf.Id == 1 && wf.Type == TType.Struct && !readInner)
+            {
+                await ReadStructAsync(proto, fieldHandler, ct);   // the request struct itself
+                readInner = true;
+            }
+            else await proto.SkipAsync(wf.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+    }
+
     // ── Thrift type r/w ───────────────────────────────────────────────────────
 
     private static async Task<ThriftDatabase> ReadThriftDatabaseAsync(ThriftBinaryProtocol proto, CancellationToken ct)
@@ -896,7 +929,7 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 case 2: description = await p.ReadStringAsync(ct); break;
                 case 3: locationUri = await p.ReadStringAsync(ct); break;
                 case 4: parameters = await ReadStringMapAsync(p, ct); break;
-                case 5: ownerName = await p.ReadStringAsync(ct); break;
+                case 6: ownerName = await p.ReadStringAsync(ct); break;   // 5 is privileges; ownerName is 6
                 default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
@@ -905,12 +938,19 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
 
     private static async Task WriteThriftDatabaseAsync(ThriftBinaryProtocol proto, ThriftDatabase db, CancellationToken ct)
     {
+        // Official hive_metastore.thrift Database field ids. Field 5 is privileges
+        // (PrincipalPrivilegeSet) — NOT ownerName — so ownerName is 6, ownerType 7, catalogName 8.
+        // catalogName is REQUIRED in practice: Hive 4's client calls db.getCatalogName() when
+        // compiling CREATE TABLE (to build the catalog-qualified name); if we omit it the client
+        // gets null and throws a NullPointerException before it ever sends create_table.
         await proto.WriteStructBeginAsync("Database", ct);
         await WriteStringField(proto, 1, db.Name, ct);
         if (db.Description is not null) await WriteStringField(proto, 2, db.Description, ct);
         await WriteStringField(proto, 3, db.LocationUri, ct);
         await WriteStringMapField(proto, 4, db.Parameters ?? new(), ct);
-        if (db.OwnerName is not null) await WriteStringField(proto, 5, db.OwnerName, ct);
+        if (db.OwnerName is not null) await WriteStringField(proto, 6, db.OwnerName, ct);
+        await WriteI32Field(proto, 7, 1, ct);          // ownerType = USER
+        await WriteStringField(proto, 8, "hive", ct);  // catalogName (default catalog)
         await proto.WriteFieldStopAsync(ct);
         await proto.WriteStructEndAsync(ct);
     }

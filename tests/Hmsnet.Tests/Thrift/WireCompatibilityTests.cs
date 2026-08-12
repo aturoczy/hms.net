@@ -106,6 +106,32 @@ public class WireCompatibilityTests
     }
 
     [TestMethod]
+    public async Task Get_database_req_unwraps_the_request_and_finds_an_existing_db()
+    {
+        // Real Hive 4 HS2 validates the target DB during CREATE TABLE via get_database_req, whose one
+        // argument is a GetDatabaseRequest nested under the method args wrapper. If the server reads the
+        // name at the wrapper level it comes back empty and HS2 reports a freshly created database as
+        // "does not exist" — which blocked every sample-data CREATE TABLE.
+        await _client.CreateDatabaseAsync("req_db", owner: "svc");
+        var db = await _client.GetDatabaseReqAsync("req_db");
+        Assert.AreEqual("req_db", db.Name);
+    }
+
+    [TestMethod]
+    public async Task Get_table_objects_by_name_req_with_no_names_lists_all_tables()
+    {
+        // SHOW TABLES on Hive 4 HS2 is get_table_objects_by_name_req with the db name and an EMPTY name
+        // list, expecting every table back. The old handler read the request at the wrapper level, got
+        // an empty db, and returned nothing — the "No tables" symptom even though the tables exist.
+        await _client.CreateDatabaseAsync("show_db");
+        await _client.CreateTableAsync(RichTable("show_db", "orders"));
+        await _client.CreateTableAsync(RichTable("show_db", "customers"));
+
+        var listed = await _client.GetTableObjectsByNameReqAsync("show_db", []);
+        CollectionAssert.AreEquivalent(new List<string> { "orders", "customers" }, listed);
+    }
+
+    [TestMethod]
     public async Task Table_wire_layout_matches_the_official_hive_field_ids()
     {
         var bytes = await ThriftTestClient.SerializeTableAsync(RichTable("db", "t"));

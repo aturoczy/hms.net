@@ -179,6 +179,94 @@ public sealed class ThriftTestClient : IAsyncDisposable
         return db ?? throw new ThriftApplicationException("Database not found", 6);
     }
 
+    // ── *_req RPCs — wrapped exactly like a real Hive 4 HS2 sends them ─────────────
+    // The single request struct is nested one level below the method args wrapper:
+    // `<method>_args { 1: <Request> { …real fields… } }`. These exercise the server's
+    // request-unwrapping (the class of bug that made HS2 see a fresh DB as "does not exist"
+    // and SHOW TABLES come back empty).
+
+    public async Task<ThriftDatabase> GetDatabaseReqAsync(string name, CancellationToken ct = default)
+    {
+        await SendCallAsync("get_database_req", ct);
+        await _proto.WriteStructBeginAsync("get_database_req_args", ct);
+        await _proto.WriteFieldBeginAsync(new TField("request", TType.Struct, 1), ct);
+        await _proto.WriteStructBeginAsync("GetDatabaseRequest", ct);
+        await WriteStringFieldAsync(1, name, ct);          // GetDatabaseRequest.name
+        await _proto.WriteFieldStopAsync(ct);
+        await _proto.WriteStructEndAsync(ct);
+        await _proto.WriteFieldEndAsync(ct);
+        await _proto.WriteFieldStopAsync(ct);
+        await _proto.WriteStructEndAsync(ct);
+        await FlushAndReadReplyAsync(ct);
+
+        ThriftDatabase? db = null;
+        await _proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await _proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 0 && f.Type == TType.Struct) db = await ReadThriftDatabaseAsync(ct);
+            else await _proto.SkipAsync(f.Type, ct);
+            await _proto.ReadFieldEndAsync(ct);
+        }
+        await _proto.ReadStructEndAsync(ct);
+        await _proto.ReadMessageEndAsync(ct);
+        return db ?? throw new ThriftApplicationException("Database not found", 6);
+    }
+
+    public async Task<List<string>> GetTableObjectsByNameReqAsync(string dbName, List<string> names, CancellationToken ct = default)
+    {
+        await SendCallAsync("get_table_objects_by_name_req", ct);
+        await _proto.WriteStructBeginAsync("get_table_objects_by_name_req_args", ct);
+        await _proto.WriteFieldBeginAsync(new TField("request", TType.Struct, 1), ct);
+        await _proto.WriteStructBeginAsync("GetTablesRequest", ct);
+        await WriteStringFieldAsync(1, dbName, ct);         // GetTablesRequest.dbName
+        await _proto.WriteFieldBeginAsync(new TField("tblNames", TType.List, 2), ct);
+        await _proto.WriteListBeginAsync(new TList(TType.String, names.Count), ct);
+        foreach (var n in names) await _proto.WriteStringAsync(n, ct);
+        await _proto.WriteListEndAsync(ct);
+        await _proto.WriteFieldEndAsync(ct);
+        await _proto.WriteFieldStopAsync(ct);
+        await _proto.WriteStructEndAsync(ct);
+        await _proto.WriteFieldEndAsync(ct);
+        await _proto.WriteFieldStopAsync(ct);
+        await _proto.WriteStructEndAsync(ct);
+        await FlushAndReadReplyAsync(ct);
+
+        // reply: _result { 0: GetTablesResult { 1: list<Table> tables } }
+        var tableNames = new List<string>();
+        await _proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var f = await _proto.ReadFieldBeginAsync(ct);
+            if (f.Type == TType.Stop) break;
+            if (f.Id == 0 && f.Type == TType.Struct)
+            {
+                await _proto.ReadStructBeginAsync(ct);      // GetTablesResult
+                while (true)
+                {
+                    var g = await _proto.ReadFieldBeginAsync(ct);
+                    if (g.Type == TType.Stop) break;
+                    if (g.Id == 1 && g.Type == TType.List)
+                    {
+                        var list = await _proto.ReadListBeginAsync(ct);
+                        for (var i = 0; i < list.Count; i++)
+                            tableNames.Add((await ReadThriftTableAsync(ct)).TableName);
+                        await _proto.ReadListEndAsync(ct);
+                    }
+                    else await _proto.SkipAsync(g.Type, ct);
+                    await _proto.ReadFieldEndAsync(ct);
+                }
+                await _proto.ReadStructEndAsync(ct);
+            }
+            else await _proto.SkipAsync(f.Type, ct);
+            await _proto.ReadFieldEndAsync(ct);
+        }
+        await _proto.ReadStructEndAsync(ct);
+        await _proto.ReadMessageEndAsync(ct);
+        return tableNames;
+    }
+
     public async Task DropDatabaseAsync(string name, bool deleteData = false, bool cascade = false, CancellationToken ct = default)
     {
         await SendCallAsync("drop_database", ct);
@@ -460,7 +548,8 @@ public sealed class ThriftTestClient : IAsyncDisposable
         if (description is not null) await WriteStringFieldAsync(2, description, ct);
         if (location is not null) await WriteStringFieldAsync(3, location, ct);
         if (parameters is not null) await WriteStringMapFieldAsync(4, parameters, ct);
-        if (owner is not null) await WriteStringFieldAsync(5, owner, ct);
+        // Official hive_metastore.thrift: field 5 is privileges, ownerName is field 6.
+        if (owner is not null) await WriteStringFieldAsync(6, owner, ct);
         await _proto.WriteFieldStopAsync(ct);
         await _proto.WriteStructEndAsync(ct);
     }
@@ -581,7 +670,7 @@ public sealed class ThriftTestClient : IAsyncDisposable
                 case 2 when f.Type == TType.String: description = await _proto.ReadStringAsync(ct); break;
                 case 3 when f.Type == TType.String: locationUri = await _proto.ReadStringAsync(ct); break;
                 case 4 when f.Type == TType.Map: parameters = await ReadStringMapAsync(ct); break;
-                case 5 when f.Type == TType.String: ownerName = await _proto.ReadStringAsync(ct); break;
+                case 6 when f.Type == TType.String: ownerName = await _proto.ReadStringAsync(ct); break;  // 5 is privileges
                 default: await _proto.SkipAsync(f.Type, ct); break;
             }
             await _proto.ReadFieldEndAsync(ct);
