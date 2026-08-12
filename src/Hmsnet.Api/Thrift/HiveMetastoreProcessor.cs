@@ -22,6 +22,9 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             ["get_all_tables"] = (p, proto, header, ct) => p.HandleGetAllTablesAsync(proto, header, ct),
             ["get_tables"] = (p, proto, header, ct) => p.HandleGetTablesAsync(proto, header, ct),
             ["get_table"] = (p, proto, header, ct) => p.HandleGetTableAsync(proto, header, ct),
+            // Hive 4.x request-wrapped variant — used by query compilation (e.g. SELECT ... looks up
+            // the table via get_table_req, not get_table).
+            ["get_table_req"] = (p, proto, header, ct) => p.HandleGetTableReqAsync(proto, header, ct),
             ["create_table"] = (p, proto, header, ct) => p.HandleCreateTableAsync(proto, header, ct),
             ["drop_table"] = (p, proto, header, ct) => p.HandleDropTableAsync(proto, header, ct),
             ["alter_table"] = (p, proto, header, ct) => p.HandleAlterTableAsync(proto, header, ct),
@@ -191,6 +194,53 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         {
             await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
             await WriteThriftTableAsync(proto, table, ct);
+            await proto.WriteFieldEndAsync(ct);
+        }
+        await FinishStructAsync(proto, ct);
+    }
+
+    private async Task HandleGetTableReqAsync(ThriftBinaryProtocol proto, TMessage header, CancellationToken ct)
+    {
+        // GetTableRequest has mixed field types (1:dbName, 2:tblName, 3:capabilities struct,
+        // 4:catName, …), so we must skip unknown fields by their ACTUAL wire type, not a fixed one.
+        string dbName = string.Empty, tblName = string.Empty;
+        await proto.ReadStructBeginAsync(ct);
+        while (true)
+        {
+            var field = await proto.ReadFieldBeginAsync(ct);
+            if (field.Type == TType.Stop) break;
+            if (field.Id == 1 && field.Type == TType.String) dbName = await proto.ReadStringAsync(ct);
+            else if (field.Id == 2 && field.Type == TType.String) tblName = await proto.ReadStringAsync(ct);
+            else await proto.SkipAsync(field.Type, ct);
+            await proto.ReadFieldEndAsync(ct);
+        }
+        await proto.ReadStructEndAsync(ct);
+
+        var table = await handler.GetTableAsync(StripCatalog(dbName), tblName, ct);
+
+        await proto.WriteMessageBeginAsync(new TMessage("get_table_req", TMessageType.Reply, header.SeqId), ct);
+        await proto.WriteStructBeginAsync("get_table_req_result", ct);
+        if (table is not null)
+        {
+            // success (0) = GetTableResult { 1: required Table table }
+            await proto.WriteFieldBeginAsync(new TField("success", TType.Struct, 0), ct);
+            await proto.WriteStructBeginAsync("GetTableResult", ct);
+            await proto.WriteFieldBeginAsync(new TField("table", TType.Struct, 1), ct);
+            await WriteThriftTableAsync(proto, table, ct);
+            await proto.WriteFieldEndAsync(ct);
+            await proto.WriteFieldStopAsync(ct);
+            await proto.WriteStructEndAsync(ct);
+            await proto.WriteFieldEndAsync(ct);
+        }
+        else
+        {
+            // o2 (2) = NoSuchObjectException { 1: message } — HS2 handles this (e.g. the virtual
+            // _dummy_table for SELECT without FROM).
+            await proto.WriteFieldBeginAsync(new TField("o2", TType.Struct, 2), ct);
+            await proto.WriteStructBeginAsync("NoSuchObjectException", ct);
+            await WriteStringField(proto, 1, $"{dbName}.{tblName} table not found", ct);
+            await proto.WriteFieldStopAsync(ct);
+            await proto.WriteStructEndAsync(ct);
             await proto.WriteFieldEndAsync(ct);
         }
         await FinishStructAsync(proto, ct);
