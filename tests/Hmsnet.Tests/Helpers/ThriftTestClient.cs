@@ -475,16 +475,16 @@ public sealed class ThriftTestClient : IAsyncDisposable
             await WriteThriftSdAsync(sdWithCols, ct);
             await _proto.WriteFieldEndAsync(ct);
         }
-        if (t.Parameters is not null) await WriteStringMapFieldAsync(8, t.Parameters, ct);
         var partKeys = t.PartitionKeys ?? [];
-        await _proto.WriteFieldBeginAsync(new TField("partitionKeys", TType.List, 9), ct);
+        await _proto.WriteFieldBeginAsync(new TField("partitionKeys", TType.List, 8), ct);
         await _proto.WriteListBeginAsync(new TList(TType.Struct, partKeys.Count), ct);
         foreach (var pk in partKeys) await WriteThriftFieldSchemaAsync(pk, ct);
         await _proto.WriteListEndAsync(ct);
         await _proto.WriteFieldEndAsync(ct);
-        if (t.ViewOriginalText is not null) await WriteStringFieldAsync(12, t.ViewOriginalText, ct);
-        if (t.ViewExpandedText is not null) await WriteStringFieldAsync(13, t.ViewExpandedText, ct);
-        await WriteStringFieldAsync(15, t.TableType, ct);
+        if (t.Parameters is not null) await WriteStringMapFieldAsync(9, t.Parameters, ct);
+        if (t.ViewOriginalText is not null) await WriteStringFieldAsync(10, t.ViewOriginalText, ct);
+        if (t.ViewExpandedText is not null) await WriteStringFieldAsync(11, t.ViewExpandedText, ct);
+        await WriteStringFieldAsync(12, t.TableType, ct);
         await _proto.WriteFieldStopAsync(ct);
         await _proto.WriteStructEndAsync(ct);
     }
@@ -499,15 +499,15 @@ public sealed class ThriftTestClient : IAsyncDisposable
         foreach (var f in cols) await WriteThriftFieldSchemaAsync(f, ct);
         await _proto.WriteListEndAsync(ct);
         await _proto.WriteFieldEndAsync(ct);
-        await WriteStringFieldAsync(4, sd.Location, ct);
-        await WriteStringFieldAsync(5, sd.InputFormat, ct);
-        await WriteStringFieldAsync(6, sd.OutputFormat, ct);
-        await WriteBoolFieldAsync(7, sd.Compressed, ct);
-        await WriteI32FieldAsync(8, sd.NumBuckets, ct);
-        await _proto.WriteFieldBeginAsync(new TField("serDeInfo", TType.Struct, 9), ct);
+        await WriteStringFieldAsync(2, sd.Location, ct);
+        await WriteStringFieldAsync(3, sd.InputFormat, ct);
+        await WriteStringFieldAsync(4, sd.OutputFormat, ct);
+        await WriteBoolFieldAsync(5, sd.Compressed, ct);
+        await WriteI32FieldAsync(6, sd.NumBuckets, ct);
+        await _proto.WriteFieldBeginAsync(new TField("serDeInfo", TType.Struct, 7), ct);
         await WriteThriftSerDeInfoAsync(sd.SerDeInfo, ct);
         await _proto.WriteFieldEndAsync(ct);
-        if (sd.Parameters is not null) await WriteStringMapFieldAsync(12, sd.Parameters, ct);
+        if (sd.Parameters is not null) await WriteStringMapFieldAsync(10, sd.Parameters, ct);
         await _proto.WriteFieldStopAsync(ct);
         await _proto.WriteStructEndAsync(ct);
     }
@@ -602,11 +602,11 @@ public sealed class ThriftTestClient : IAsyncDisposable
                 case 5 when f.Type == TType.I32: lastAccess = await _proto.ReadI32Async(ct); break;
                 case 6 when f.Type == TType.I32: retention = await _proto.ReadI32Async(ct); break;
                 case 7 when f.Type == TType.Struct: sd = await ReadThriftSdAsync(ct); break;
-                case 8 when f.Type == TType.Map: parameters = await ReadStringMapAsync(ct); break;
-                case 9 when f.Type == TType.List: partKeys = await ReadFieldSchemaListAsync(ct); break;
-                case 12 when f.Type == TType.String: viewOrig = await _proto.ReadStringAsync(ct); break;
-                case 13 when f.Type == TType.String: viewExp = await _proto.ReadStringAsync(ct); break;
-                case 15 when f.Type == TType.String: tableType = await _proto.ReadStringAsync(ct); break;
+                case 8 when f.Type == TType.List: partKeys = await ReadFieldSchemaListAsync(ct); break;
+                case 9 when f.Type == TType.Map: parameters = await ReadStringMapAsync(ct); break;
+                case 10 when f.Type == TType.String: viewOrig = await _proto.ReadStringAsync(ct); break;
+                case 11 when f.Type == TType.String: viewExp = await _proto.ReadStringAsync(ct); break;
+                case 12 when f.Type == TType.String: tableType = await _proto.ReadStringAsync(ct); break;
                 default: await _proto.SkipAsync(f.Type, ct); break;
             }
             await _proto.ReadFieldEndAsync(ct);
@@ -630,13 +630,13 @@ public sealed class ThriftTestClient : IAsyncDisposable
             if (f.Type == TType.Stop) break;
             switch (f.Id)
             {
-                case 4 when f.Type == TType.String: location = await _proto.ReadStringAsync(ct); break;
-                case 5 when f.Type == TType.String: inputFormat = await _proto.ReadStringAsync(ct); break;
-                case 6 when f.Type == TType.String: outputFormat = await _proto.ReadStringAsync(ct); break;
-                case 7 when f.Type == TType.Bool: compressed = await _proto.ReadBoolAsync(ct); break;
-                case 8 when f.Type == TType.I32: numBuckets = await _proto.ReadI32Async(ct); break;
-                case 9 when f.Type == TType.Struct: serDeInfo = await ReadThriftSerDeInfoAsync(ct); break;
-                case 12 when f.Type == TType.Map: parameters = await ReadStringMapAsync(ct); break;
+                case 2 when f.Type == TType.String: location = await _proto.ReadStringAsync(ct); break;
+                case 3 when f.Type == TType.String: inputFormat = await _proto.ReadStringAsync(ct); break;
+                case 4 when f.Type == TType.String: outputFormat = await _proto.ReadStringAsync(ct); break;
+                case 5 when f.Type == TType.Bool: compressed = await _proto.ReadBoolAsync(ct); break;
+                case 6 when f.Type == TType.I32: numBuckets = await _proto.ReadI32Async(ct); break;
+                case 7 when f.Type == TType.Struct: serDeInfo = await ReadThriftSerDeInfoAsync(ct); break;
+                case 10 when f.Type == TType.Map: parameters = await ReadStringMapAsync(ct); break;
                 default: await _proto.SkipAsync(f.Type, ct); break;
             }
             await _proto.ReadFieldEndAsync(ct);

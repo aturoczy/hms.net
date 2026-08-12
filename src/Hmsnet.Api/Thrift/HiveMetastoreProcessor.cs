@@ -934,12 +934,14 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
                 case 4: createTime = await p.ReadI32Async(ct); break;
                 case 5: lastAccess = await p.ReadI32Async(ct); break;
                 case 6: retention = await p.ReadI32Async(ct); break;
+                // Official Hive Table field ids: 7 sd, 8 partitionKeys, 9 parameters,
+                // 10 viewOriginalText, 11 viewExpandedText, 12 tableType.
                 case 7: sd = await ReadThriftSdAsync(p, ct); break;
-                case 8: parameters = await ReadStringMapAsync(p, ct); break;
-                case 9: partKeys = await ReadFieldSchemaListAsync(p, ct); break;
-                case 12: viewOrig = await p.ReadStringAsync(ct); break;
-                case 13: viewExp = await p.ReadStringAsync(ct); break;
-                case 15: tableType = await p.ReadStringAsync(ct); break;
+                case 8: partKeys = await ReadFieldSchemaListAsync(p, ct); break;
+                case 9: parameters = await ReadStringMapAsync(p, ct); break;
+                case 10: viewOrig = await p.ReadStringAsync(ct); break;
+                case 11: viewExp = await p.ReadStringAsync(ct); break;
+                case 12: tableType = await p.ReadStringAsync(ct); break;
                 default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
@@ -963,10 +965,9 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
             await WriteThriftSdAsync(proto, t.Sd, ct);
             await proto.WriteFieldEndAsync(ct);
         }
-        await WriteStringMapField(proto, 8, t.Parameters ?? new(), ct);
-        // field 9 = partitionKeys (list<FieldSchema>)
+        // field 8 = partitionKeys (list<FieldSchema>)
         var partKeys = t.PartitionKeys ?? [];
-        await proto.WriteFieldBeginAsync(new TField("partitionKeys", TType.List, 9), ct);
+        await proto.WriteFieldBeginAsync(new TField("partitionKeys", TType.List, 8), ct);
         await proto.WriteListBeginAsync(new TList(TType.Struct, partKeys.Count), ct);
         foreach (var pk in partKeys)
         {
@@ -979,7 +980,8 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         }
         await proto.WriteListEndAsync(ct);
         await proto.WriteFieldEndAsync(ct);
-        await WriteStringField(proto, 15, t.TableType, ct);
+        await WriteStringMapField(proto, 9, t.Parameters ?? new(), ct);   // field 9 = parameters
+        await WriteStringField(proto, 12, t.TableType, ct);              // field 12 = tableType
         await proto.WriteFieldStopAsync(ct);
         await proto.WriteStructEndAsync(ct);
     }
@@ -996,14 +998,16 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         {
             switch (id)
             {
+                // Official Hive StorageDescriptor field ids: 1 cols, 2 location, 3 inputFormat,
+                // 4 outputFormat, 5 compressed, 6 numBuckets, 7 serdeInfo, 10 parameters.
                 case 1: cols = await ReadFieldSchemaListAsync(p, ct); break;
-                case 4: location = await p.ReadStringAsync(ct); break;
-                case 5: inputFormat = await p.ReadStringAsync(ct); break;
-                case 6: outputFormat = await p.ReadStringAsync(ct); break;
-                case 7: compressed = await p.ReadBoolAsync(ct); break;
-                case 8: numBuckets = await p.ReadI32Async(ct); break;
-                case 9: serDeInfo = await ReadThriftSerDeInfoAsync(p, ct); break;
-                case 12: parameters = await ReadStringMapAsync(p, ct); break;
+                case 2: location = await p.ReadStringAsync(ct); break;
+                case 3: inputFormat = await p.ReadStringAsync(ct); break;
+                case 4: outputFormat = await p.ReadStringAsync(ct); break;
+                case 5: compressed = await p.ReadBoolAsync(ct); break;
+                case 6: numBuckets = await p.ReadI32Async(ct); break;
+                case 7: serDeInfo = await ReadThriftSerDeInfoAsync(p, ct); break;
+                case 10: parameters = await ReadStringMapAsync(p, ct); break;
                 default: await p.SkipAsync(ftype, ct); break;
             }
         }, ct);
@@ -1030,15 +1034,15 @@ public sealed class HiveMetastoreProcessor(ThriftHmsHandler handler)
         }
         await proto.WriteListEndAsync(ct);
         await proto.WriteFieldEndAsync(ct);
-        await WriteStringField(proto, 4, sd.Location, ct);
-        await WriteStringField(proto, 5, sd.InputFormat, ct);
-        await WriteStringField(proto, 6, sd.OutputFormat, ct);
-        await WriteBoolField(proto, 7, sd.Compressed, ct);
-        await WriteI32Field(proto, 8, sd.NumBuckets, ct);
-        await proto.WriteFieldBeginAsync(new TField("serDeInfo", TType.Struct, 9), ct);
+        await WriteStringField(proto, 2, sd.Location, ct);
+        await WriteStringField(proto, 3, sd.InputFormat, ct);
+        await WriteStringField(proto, 4, sd.OutputFormat, ct);
+        await WriteBoolField(proto, 5, sd.Compressed, ct);
+        await WriteI32Field(proto, 6, sd.NumBuckets, ct);
+        await proto.WriteFieldBeginAsync(new TField("serDeInfo", TType.Struct, 7), ct);
         await WriteThriftSerDeInfoAsync(proto, sd.SerDeInfo, ct);
         await proto.WriteFieldEndAsync(ct);
-        await WriteStringMapField(proto, 12, sd.Parameters ?? new(), ct);
+        await WriteStringMapField(proto, 10, sd.Parameters ?? new(), ct);
         await proto.WriteFieldStopAsync(ct);
         await proto.WriteStructEndAsync(ct);
     }
