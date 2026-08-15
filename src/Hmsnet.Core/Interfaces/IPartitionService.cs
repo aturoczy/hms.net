@@ -21,6 +21,7 @@ public interface IPartitionService
 
     Task<bool> DropPartitionAsync(string dbName, string tableName, IList<string> values, bool deleteData, CancellationToken ct = default);
     Task<bool> DropPartitionByNameAsync(string dbName, string tableName, string partitionName, bool deleteData, CancellationToken ct = default);
+    Task<int> DropPartitionsByNamesAsync(string dbName, string tableName, IEnumerable<string> partitionNames, bool deleteData, CancellationToken ct = default);
 
     Task<int> GetPartitionCountAsync(string dbName, string tableName, CancellationToken ct = default);
 }

@@ -163,13 +163,35 @@ public class PartitionService(MetastoreDbContext db) : IPartitionService
         return await DropPartitionAsync(dbName, tableName, values, deleteData, ct);
     }
 
+    public async Task<int> DropPartitionsByNamesAsync(
+        string dbName, string tableName,
+        IEnumerable<string> partitionNames,
+        bool deleteData,
+        CancellationToken ct = default)
+    {
+        var table = await RequireTableAsync(dbName, tableName, ct);
+        var serialized = partitionNames
+            .Select(n => System.Text.Json.JsonSerializer.Serialize((IEnumerable<string>)ParsePartitionName(n)))
+            .ToHashSet();
+
+        var toDelete = await db.Partitions
+            .Where(p => p.TableId == table.Id && serialized.Contains(p.ValuesJson))
+            .ToListAsync(ct);
+
+        if (toDelete.Count == 0) return 0;
+
+        db.Partitions.RemoveRange(toDelete);
+        await db.SaveChangesAsync(ct);
+        return toDelete.Count;
+    }
+
     public async Task<int> GetPartitionCountAsync(string dbName, string tableName, CancellationToken ct = default)
     {
         var table = await RequireTableAsync(dbName, tableName, ct);
         return await db.Partitions.CountAsync(p => p.TableId == table.Id, ct);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────────────
 
     private async Task<bool> PartitionExistsAsync(int tableId, IList<string> values, CancellationToken ct)
     {

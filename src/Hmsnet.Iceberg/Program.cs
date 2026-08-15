@@ -11,21 +11,23 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── EF Core ───────────────────────────────────────────────────────────────────
+// ── EF Core ────────────────────────────────────────────────────────
 // Provider is picked from Database:Provider — supports postgresql, sqlserver
 // and sqlite. See Hmsnet.Infrastructure/Data/MetastoreDbContextRegistration.
 builder.Services.AddMetastoreDbContext(builder.Configuration);
 
-// ── Services ──────────────────────────────────────────────────────────────────
+// ── Services ─────────────────────────────────────────────────────────
 builder.Services.AddScoped<IDatabaseService, DatabaseService>();
 builder.Services.AddScoped<ITableService, TableService>();
 builder.Services.AddScoped<IPartitionService, PartitionService>();
 builder.Services.AddScoped<IColumnStatisticsService, ColumnStatisticsService>();
+builder.Services.AddScoped<ICatalogService, CatalogService>();
 builder.Services.AddScoped<IIcebergCatalogService, IcebergCatalogService>();
+builder.Services.AddScoped<IIcebergViewService, IcebergViewService>();
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssembly(typeof(CreateIcebergNamespaceHandler).Assembly));
 
-// ── OpenTelemetry ─────────────────────────────────────────────────────────────
+// ── OpenTelemetry ──────────────────────────────────────────────────────
 var otlpEndpoint = builder.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
 
 var resourceBuilder = ResourceBuilder.CreateDefault()
@@ -59,7 +61,7 @@ builder.Services.AddOpenTelemetry()
         .AddMeter("Hmsnet.Iceberg")
         .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
 
-// ── Web API ───────────────────────────────────────────────────────────────────
+// ── Web API ────────────────────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(opts =>
     {
@@ -69,14 +71,14 @@ builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// ── Auto-migrate on startup ───────────────────────────────────────────────────
+// ── Auto-migrate on startup ─────────────────────────────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<MetastoreDbContext>();
     await db.Database.MigrateAsync();
 }
 
-// ── Middleware ────────────────────────────────────────────────────────────────
+// ── Middleware ─────────────────────────────────────────────────────────
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();

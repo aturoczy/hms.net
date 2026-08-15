@@ -6,27 +6,32 @@ using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using Hmsnet.Core.Caching;
 using Hmsnet.Core.Interfaces;
+using Hmsnet.Core.Notifications;
 using Hmsnet.Infrastructure.Caching;
 using Hmsnet.Infrastructure.Data;
+using Hmsnet.Infrastructure.Notifications;
 using Hmsnet.Infrastructure.Features.Databases;
 using Hmsnet.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── EF Core ───────────────────────────────────────────────────────────────────
+// ── EF Core ────────────────────────────────────────────────────────
 // Provider is picked from Database:Provider — supports postgresql, sqlserver
 // and sqlite. See Hmsnet.Infrastructure/Data/MetastoreDbContextRegistration.
 builder.Services.AddMetastoreDbContext(builder.Configuration);
 
-// ── Services ──────────────────────────────────────────────────────────────────
+// ── Services ─────────────────────────────────────────────────────────
+builder.Services.AddScoped<ICatalogService, CatalogService>();
+builder.Services.AddScoped<IIcebergViewService, IcebergViewService>();
 builder.Services.AddScoped<IDatabaseService, DatabaseService>();
 builder.Services.AddScoped<ITableService, TableService>();
 builder.Services.AddScoped<IPartitionService, PartitionService>();
 builder.Services.AddScoped<IColumnStatisticsService, ColumnStatisticsService>();
+builder.Services.AddScoped<INotificationEventSink, DbNotificationEventSink>();
 builder.Services.AddScoped<ThriftHmsHandler>();
 
-// ── Distributed cache (Redis) ─────────────────────────────────────────────────
+// ── Distributed cache (Redis) ────────────────────────────────────────────
 // Registers ICacheService as either RedisCacheService (when Redis:Enabled=true)
 // or NullCacheService. The MediatR pipeline behaviors below read/write through
 // whichever one is active, so flipping the flag requires no code change.
@@ -40,13 +45,14 @@ builder.Services.AddMediatR(cfg =>
     // SaveChanges.
     cfg.AddOpenBehavior(typeof(CachingBehavior<,>));
     cfg.AddOpenBehavior(typeof(InvalidationBehavior<,>));
+    cfg.AddOpenBehavior(typeof(NotificationEmissionBehavior<,>));
 });
 
-// ── Thrift server ─────────────────────────────────────────────────────────────
+// ── Thrift server ──────────────────────────────────────────────────────
 builder.Services.Configure<ThriftServerOptions>(builder.Configuration.GetSection("Thrift"));
 builder.Services.AddHostedService<ThriftMetastoreServer>();
 
-// ── OpenTelemetry ─────────────────────────────────────────────────────────────
+// ── OpenTelemetry ──────────────────────────────────────────────────────
 var otlpEndpoint = builder.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
 
 var resourceBuilder = ResourceBuilder.CreateDefault()
@@ -82,13 +88,13 @@ builder.Services.AddOpenTelemetry()
         .AddMeter("Hmsnet") // custom app meter (reserved for future use)
         .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
 
-// ── Web API ───────────────────────────────────────────────────────────────────
+// ── Web API ────────────────────────────────────────────────────────────
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// ── Auto-migrate on startup ───────────────────────────────────────────────────
+// ── Auto-migrate on startup ─────────────────────────────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<MetastoreDbContext>();
@@ -112,7 +118,7 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-// ── Middleware ────────────────────────────────────────────────────────────────
+// ── Middleware ─────────────────────────────────────────────────────────
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();          // serves /openapi/v1.json

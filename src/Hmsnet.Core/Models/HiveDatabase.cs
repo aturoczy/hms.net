@@ -11,5 +11,11 @@ public class HiveDatabase
     public Dictionary<string, string> Parameters { get; set; } = [];
     public long CreateTime { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
+    /// <summary>
+    /// Name of the parent <see cref="Catalog"/>. Defaults to
+    /// <see cref="Catalog.DefaultName"/> so pre-3.x deployments keep working.
+    /// </summary>
+    public string CatalogName { get; set; } = Catalog.DefaultName;
+
     public ICollection<HiveTable> Tables { get; set; } = [];
 }
